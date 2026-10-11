@@ -18,16 +18,20 @@ from config import (
     START_IMAGE_URL, API_ENDPOINTS, MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
 )
 
+# ========== DETAILED LOGGING SETUP ==========
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),  # Heroku logs में दिखेगा
+    ]
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("TG_OSINT_BOT")
 
 
-# ---------- Helpers ----------
+# ========== LOG HELPERS ==========
 async def send_log(context, text):
     if not LOG_CHANNEL_ID:
         return
@@ -36,7 +40,7 @@ async def send_log(context, text):
             chat_id=LOG_CHANNEL_ID, text=text,
             parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     except Exception as e:
-        logger.warning(f"Log send failed: {e}")
+        logger.warning(f"Log channel send failed: {e}")
 
 
 def user_info(update):
@@ -62,14 +66,43 @@ async def safe_edit(query, text, **kwargs):
         try:
             await query.message.chat.send_message(text, **kwargs)
         except Exception as e:
-            logger.error(f"send fallback failed: {e}")
+            logger.error(f"safe_edit send fallback failed: {e}")
 
 
-# ---------- Lookup ----------
+# ========== API LOOKUP — DETAILED LOGGING ==========
 def _parse_response(endpoint, data):
-    parser = endpoint.get("parser", "aerosend")
-    if parser == "aerosend":
-        return data if data.get("status") == "success" else None
+    parser = endpoint.get("parser", "generic")
+    logger.info(f"Parsing with parser={parser}, raw data={data}")
+
+    if parser == "callmebot":
+        # Callmebot response: {"status": "success", "phone": "+91..."}
+        if data.get("status") == "success" or data.get("phone"):
+            return {
+                "tg_id": data.get("id", "N/A"),
+                "mobile": data.get("phone", "N/A"),
+                "country_code": data.get("country_code", "N/A"),
+                "country": data.get("country", "N/A"),
+            }
+        return None
+
+    if parser == "callmebot_id":
+        if data.get("status") == "success" or data.get("phone"):
+            return {
+                "tg_id": data.get("id", "N/A"),
+                "mobile": data.get("phone", "N/A"),
+                "country_code": data.get("country_code", "N/A"),
+                "country": data.get("country", "N/A"),
+            }
+        return None
+
+    # Generic fallback
+    if data.get("success") or data.get("status") in ("ok", "success"):
+        return {
+            "tg_id": data.get("tg_id") or data.get("id"),
+            "mobile": data.get("mobile") or data.get("phone"),
+            "country_code": data.get("country_code") or data.get("cc"),
+            "country": data.get("country"),
+        }
     return None
 
 
@@ -80,25 +113,49 @@ def _is_valid_url(url):
 async def lookup_tg(query):
     """ID या username — दोनों accept करता है"""
     q = query.lstrip("@")
-    for endpoint in API_ENDPOINTS:
+    logger.info(f"Starting lookup for query='{q}'")
+
+    for ep_idx, endpoint in enumerate(API_ENDPOINTS):
         if not _is_valid_url(endpoint["url"]):
+            logger.warning(f"[{ep_idx}] Skipping invalid URL: {endpoint['url']}")
             continue
+
         for attempt in range(MAX_TRIES):
             try:
                 params = {k: v.format(query=q)
                           for k, v in endpoint["params"].items()}
-                r = requests.get(endpoint["url"], params=params,
-                                 timeout=REQUEST_TIMEOUT).json()
-                parsed = _parse_response(endpoint, r)
+                logger.info(f"[{ep_idx}] Attempt {attempt+1}/{MAX_TRIES} | URL={endpoint['url']} | params={params}")
+
+                resp = requests.get(endpoint["url"], params=params,
+                                    timeout=REQUEST_TIMEOUT)
+                logger.info(f"[{ep_idx}] HTTP {resp.status_code} | len={len(resp.text)}")
+
+                data = resp.json()
+                logger.info(f"[{ep_idx}] JSON response: {data}")
+
+                parsed = _parse_response(endpoint, data)
                 if parsed:
+                    logger.info(f"[{ep_idx}] ✅ SUCCESS — parsed={parsed}")
                     return parsed
+                else:
+                    logger.warning(f"[{ep_idx}] Parser returned None (status={data.get('status')})")
+
+            except requests.exceptions.Timeout:
+                logger.warning(f"[{ep_idx}] Attempt {attempt+1} TIMEOUT after {REQUEST_TIMEOUT}s")
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(f"[{ep_idx}] Attempt {attempt+1} CONNECTION ERROR: {e}")
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"[{ep_idx}] Attempt {attempt+1} REQUEST ERROR: {e}")
             except Exception as e:
-                logger.warning(f"[{endpoint['url']}] try {attempt+1}: {e}")
+                logger.error(f"[{ep_idx}] Attempt {attempt+1} UNEXPECTED: {e}")
+
             await asyncio.sleep(RETRY_DELAY)
+
+    logger.error(f"❌ ALL APIs FAILED for query='{q}'")
     return None
 
 
-# ---------- Keyboards ----------
+# ========== KEYBOARDS ==========
 def main_menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Search 🔎", callback_data="search", style="success")],
@@ -138,8 +195,9 @@ def close_kb():
     ])
 
 
-# ---------- Commands ----------
+# ========== COMMANDS ==========
 async def start(update, context):
+    logger.info(f"/start from user={update.effective_user.id}")
     await send_log(context,
                    f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
 
@@ -175,11 +233,12 @@ async def help_cmd(update, context):
         parse_mode=ParseMode.HTML, reply_markup=back_kb())
 
 
-# ---------- Button Handler ----------
+# ========== BUTTON HANDLER ==========
 async def button_handler(update, context):
     q = update.callback_query
     await q.answer()
     data = q.data
+    logger.info(f"Button pressed: {data} by user={update.effective_user.id}")
 
     await send_log(context,
                    f"🔘 <b>Button:</b> <code>{html.escape(data)}</code>\n"
@@ -192,7 +251,6 @@ async def button_handler(update, context):
             "• <code>123456789</code> (ID)\n"
             "• <code>@durov</code> (username)",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-
     elif data == "help":
         await safe_edit(q,
             "ℹ️ <b>How to use</b>\n\n"
@@ -200,7 +258,6 @@ async def button_handler(update, context):
             "3️⃣ ID या username भेजो\n4️⃣ Result\n\n"
             "⚠️ केवल consent के साथ use करो।",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-
     elif data == "stats":
         active = sum(1 for e in API_ENDPOINTS if _is_valid_url(e["url"]))
         await safe_edit(q,
@@ -208,9 +265,8 @@ async def button_handler(update, context):
             f"🤖 Status: <b>Online</b>\n"
             f"🔌 APIs: <b>{active} active</b>\n"
             f"⚡ Mode: <b>Long Polling</b>\n"
-            f"🛡️ Version: <b>3.3</b>",
+            f"🛡️ Version: <b>4.0</b>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-
     elif data == "owner":
         owner = (f'👤 <b>Owner:</b> <a href="https://t.me/{OWNER_USERNAME.lstrip("@")}">'
                  f'{html.escape(OWNER_USERNAME)}</a>'
@@ -218,7 +274,6 @@ async def button_handler(update, context):
         await safe_edit(q, f"{owner}\n\n🛠️ Developed with ❤️",
                        parse_mode=ParseMode.HTML, reply_markup=back_kb(),
                        disable_web_page_preview=True)
-
     elif data == "support":
         sup = (f'💬 <b>Support:</b> <a href="https://t.me/{SUPPORT_USERNAME.lstrip("@")}">'
                f'{html.escape(SUPPORT_USERNAME)}</a>'
@@ -226,22 +281,20 @@ async def button_handler(update, context):
         await safe_edit(q, f"{sup}\n\n⏰ Response within 24 hours",
                        parse_mode=ParseMode.HTML, reply_markup=back_kb(),
                        disable_web_page_preview=True)
-
     elif data == "menu":
         await safe_edit(q, "👋 <b>TG OSINT Bot</b>\n\nOption चुनो:",
                        parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
-
     elif data == "close":
         await safe_edit(q, "❌ <b>Close bot?</b>",
                        parse_mode=ParseMode.HTML, reply_markup=close_kb())
-
     elif data == "noop":
         await q.answer("Okay!", show_alert=False)
 
 
-# ---------- Text Handler ----------
+# ========== TEXT HANDLER ==========
 async def handle_text(update, context):
     text = update.message.text.strip()
+    logger.info(f"Text received: '{text}' from user={update.effective_user.id}")
 
     await send_log(context,
                    f"📥 <b>USER INPUT</b>\n🕒 {now_str()}\n\n{user_info(update)}\n\n"
@@ -284,7 +337,7 @@ async def handle_text(update, context):
                    f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile', 'N/A')))}</code>")
 
 
-# ---------- Error Handler ----------
+# ========== ERROR HANDLER ==========
 async def error_handler(update, context):
     logger.error("Exception:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
@@ -299,7 +352,7 @@ async def error_handler(update, context):
                    f"<code>{html.escape(str(context.error))}</code>")
 
 
-# ---------- Main ----------
+# ========== MAIN ==========
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logger.error("BOT_TOKEN not set!")
