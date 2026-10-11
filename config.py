@@ -19,18 +19,24 @@ API_ENDPOINTS = [
         "params": {"key": "crazy", "num": "{tg_id}"},
         "parser": "aerosend",
     },
-    # 2. SmartUserInfo (self-hosted) — apna server chala ke use karo
-    # {
-    #     "url": "http://localhost:8000/info",
-    #     "params": {"username": "{tg_id}"},
-    #     "parser": "smartuserinfo",
-    # },
-    # 3. tgden (free REST search) — replace URL with actual endpoint
-    # {
-    #     "url": "https://tgden.example.com/search",
-    #     "params": {"q": "{tg_id}"},
-    #     "parser": "tgden",
-    # },
+    # 2. SmartUserInfo (self-hosted ya kisi public instance se)
+    {
+        "url": "https://smartuserinfo.example.com/info",
+        "params": {"username": "{tg_id}"},
+        "parser": "smartuserinfo",
+    },
+    # 3. TgUserDetails (agar koi REST endpoint ho)
+    {
+        "url": "https://tguserdetails.example.com/lookup",
+        "params": {"username": "{tg_id}"},
+        "parser": "tguserdetails",
+    },
+    # 4. Generic fallback
+    {
+        "url": "https://api.example.com/tg2num",
+        "params": {"id": "{tg_id}"},
+        "parser": "generic",
+    },
 ]
 
 # ---------- Retry Settings ----------
