@@ -10,9 +10,8 @@ from config import (BOT_TOKEN, LOG_CHANNEL_ID, OWNER_USERNAME, SUPPORT_USERNAME,
                     FALLBACK_API, MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT)
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("telegram").setLevel(logging.WARNING)
-logging.getLogger("pyrogram").setLevel(logging.WARNING)
+for lib in ("httpx", "telegram", "pyrogram", "hody_telepro"):
+    logging.getLogger(lib).setLevel(logging.WARNING)
 logger = logging.getLogger("TG_OSINT")
 
 
@@ -43,7 +42,7 @@ async def safe_edit(query, text, **kwargs):
         except Exception as e: logger.error(f"send fallback failed: {e}")
 
 
-# ---------- HODY-TELEPRO LOOKUP (Native, reliable) ----------
+# ---------- HODY LOOKUP (FIXED) ----------
 async def hody_lookup(query):
     if not TG_API_ID or not TG_API_HASH or not TG_PHONE:
         logger.warning("Hody credentials missing — skipping native lookup")
@@ -51,9 +50,26 @@ async def hody_lookup(query):
     try:
         from hody_telepro import HodyClient
         logger.info(f"Hody lookup starting for query='{query}'")
+
+        # ✅ FIX: session name as POSITIONAL argument, NOT keyword
         async with HodyClient("bot_session", api_id=TG_API_ID,
                               api_hash=TG_API_HASH) as client:
-            # Try inspect (works for username, ID)
+
+            # अगर query phone number है तो lookup_phone use करो
+            if re.match(r'^\+\d{10,15}$', query):
+                logger.info(f"Phone number detected: {query}")
+                result = await client.lookup_phone(query)
+                logger.info(f"Hody phone lookup success: username={result.username}")
+                return {
+                    "tg_id": getattr(result, "id", "N/A"),
+                    "mobile": query,
+                    "country_code": "N/A",
+                    "country": "N/A",
+                    "username": getattr(result, "username", "—"),
+                    "full_name": getattr(result, "full_name", "—"),
+                }
+
+            # वरना inspect (username/ID के लिए)
             result = await client.inspect(query)
             entity = result.entity
             logger.info(f"Hody inspect success: id={entity.id}, username={getattr(entity, 'username', None)}")
@@ -65,6 +81,9 @@ async def hody_lookup(query):
                 "username": getattr(entity, "username", None) or "—",
                 "full_name": getattr(entity, "full_name", None) or "—",
             }
+    except TypeError as e:
+        logger.error(f"Hody TypeError: {e} — check HodyClient usage")
+        return None
     except Exception as e:
         logger.error(f"Hody lookup failed: {type(e).__name__}: {e}")
         return None
@@ -79,7 +98,7 @@ async def http_lookup(query):
             logger.info(f"HTTP fallback attempt {attempt+1}: {FALLBACK_API['url']}")
             r = requests.get(FALLBACK_API["url"], params=params,
                              timeout=REQUEST_TIMEOUT)
-            logger.info(f"HTTP {r.status_code} | {r.text[:100]}")
+            logger.info(f"HTTP {r.status_code} | {r.text[:150]}")
             data = r.json()
             if data.get("status") == "success":
                 return {
@@ -97,10 +116,8 @@ async def http_lookup(query):
 
 
 async def unified_lookup(query):
-    """पहले Hody (native), फिर HTTP fallback"""
     result = await hody_lookup(query)
-    if result:
-        return result
+    if result: return result
     logger.info("Native lookup failed — trying HTTP fallback")
     return await http_lookup(query)
 
@@ -135,7 +152,7 @@ def close_kb():
 async def start(update, context):
     await send_log(context, f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
     caption = ("👋 <b>Welcome to TG OSINT Bot</b>\n\n"
-               "🔎 Telegram ID या @username भेजो।\n\n"
+               "🔎 Telegram ID, @username, या phone number भेजो।\n\n"
                "🛠️ <b>Features:</b>\n"
                "• ID → Number\n• Username → Info\n• Live logging\n\n"
                "👇 नीचे से option चुनो:")
@@ -150,7 +167,7 @@ async def start(update, context):
 async def help_cmd(update, context):
     await update.message.reply_text(
         "ℹ️ <b>How to use</b>\n\n1️⃣ /start\n2️⃣ Search 🔎\n"
-        "3️⃣ ID या @username भेजो\n4️⃣ Result\n\n"
+        "3️⃣ ID / @username / phone भेजो\n4️⃣ Result\n\n"
         "⚠️ केवल consent के साथ use करो।",
         parse_mode=ParseMode.HTML, reply_markup=back_kb())
 
@@ -163,11 +180,11 @@ async def button_handler(update, context):
     await send_log(context, f"🔘 <b>Button:</b> <code>{data}</code>\n🕒 {now_str()}\n\n{user_info(update)}")
 
     if data == "search":
-        await safe_edit(q, "🔎 <b>Send ID or @username</b>\n\n"
-                           "• <code>123456789</code>\n• <code>@durov</code>",
+        await safe_edit(q, "🔎 <b>Send ID, @username, or phone number</b>\n\n"
+                           "• <code>123456789</code>\n• <code>@durov</code>\n• <code>+919876543210</code>",
                         parse_mode=ParseMode.HTML, reply_markup=back_kb())
     elif data == "help":
-        await safe_edit(q, "ℹ️ <b>How to use</b>\n\n1️⃣ /start\n2️⃣ Search 🔎\n3️⃣ ID/@username\n4️⃣ Result",
+        await safe_edit(q, "ℹ️ <b>How to use</b>\n\n1️⃣ /start\n2️⃣ Search 🔎\n3️⃣ ID/@username/phone\n4️⃣ Result",
                         parse_mode=ParseMode.HTML, reply_markup=back_kb())
     elif data == "stats":
         hody_ok = "✅ ON" if (TG_API_ID and TG_API_HASH) else "❌ OFF"
@@ -175,7 +192,7 @@ async def button_handler(update, context):
                            f"🤖 Status: <b>Online</b>\n"
                            f"🧬 Hody-Telepro: <b>{hody_ok}</b>\n"
                            f"🔌 Fallback API: <b>1</b>\n"
-                           f"🛡️ Version: <b>5.0</b>",
+                           f"🛡️ Version: <b>5.1</b>",
                         parse_mode=ParseMode.HTML, reply_markup=back_kb())
     elif data == "owner":
         owner = (f'👤 <b>Owner:</b> <a href="https://t.me/{OWNER_USERNAME.lstrip("@")}">'
@@ -207,9 +224,11 @@ async def handle_text(update, context):
 
     is_id = text.isdigit()
     is_username = bool(re.match(r'^@?[A-Za-z][A-Za-z0-9_]{3,31}$', text))
-    if not (is_id or is_username):
-        await update.message.reply_text("❌ Invalid input. Send ID or @username.",
-                                        parse_mode=ParseMode.HTML, reply_markup=back_kb())
+    is_phone = bool(re.match(r'^\+\d{10,15}$', text))
+    if not (is_id or is_username or is_phone):
+        await update.message.reply_text(
+            "❌ Invalid input. Send ID, @username, or phone number.",
+            parse_mode=ParseMode.HTML, reply_markup=back_kb())
         return
 
     msg = await update.message.reply_text("⏳ <b>Searching...</b>", parse_mode=ParseMode.HTML)
