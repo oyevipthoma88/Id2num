@@ -13,14 +13,10 @@ from telegram.ext import (
     ContextTypes, MessageHandler, filters,
 )
 
-# Telethon for native fallback
-from telethon import TelegramClient
-from telethon.tl.functions.users import GetFullUserRequest
-
 from config import (
     BOT_TOKEN, LOG_CHANNEL_ID, OWNER_USERNAME, SUPPORT_USERNAME,
-    START_IMAGE_URL, TG_API_ID, TG_API_HASH, TG_PHONE,
-    PRIORITY_API, FALLBACK_API, MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
+    START_IMAGE_URL, API_URL, API_KEY,
+    MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
 )
 
 # ========== LOGGING ==========
@@ -30,7 +26,6 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
-logging.getLogger("telethon").setLevel(logging.WARNING)
 logger = logging.getLogger("TG_OSINT")
 
 
@@ -72,76 +67,38 @@ async def safe_edit(query, text, **kwargs):
             logger.error(f"safe_edit send fallback failed: {e}")
 
 
-# ========== PRIORITY API: aerosend.bond ==========
-async def priority_lookup(query):
-    """aerosend.bond API को सबसे पहले try करो"""
-    q = query.lstrip("@")
+# ========== API LOOKUP — बिल्कुल original file जैसा ==========
+async def lookup_tg_id(tg_id):
+    """aerosend.bond API से ID → Number lookup"""
+    q = tg_id.lstrip("@")
     for attempt in range(MAX_TRIES):
         try:
-            params = {k: v.format(query=q) for k, v in PRIORITY_API["params"].items()}
-            logger.info(f"[Priority] Attempt {attempt+1}/{MAX_TRIES} | URL={PRIORITY_API['url']}")
-            r = requests.get(PRIORITY_API["url"], params=params, timeout=REQUEST_TIMEOUT)
-            logger.info(f"[Priority] HTTP {r.status_code} | {r.text[:150]}")
-            data = r.json()
-            if data.get("status") == "success":
-                logger.info(f"[Priority] SUCCESS: {data}")
+            logger.info(f"[API] Attempt {attempt+1}/{MAX_TRIES} | query='{q}'")
+            r = requests.get(
+                API_URL,
+                params={"key": API_KEY, "num": q},
+                timeout=REQUEST_TIMEOUT,
+            ).json()
+            logger.info(f"[API] Response: {r}")
+
+            if r.get("status") == "success":
+                logger.info(f"[API] ✅ SUCCESS")
                 return {
-                    "tg_id": data.get("tg_id", q),
-                    "mobile": data.get("mobile", "N/A"),
-                    "country_code": data.get("country_code", "N/A"),
-                    "country": data.get("country", "N/A"),
-                    "username": "—",
-                    "full_name": "—",
+                    "tg_id": r.get("tg_id", q),
+                    "mobile": r.get("mobile", "N/A"),
+                    "country_code": r.get("country_code", "N/A"),
+                    "country": r.get("country", "N/A"),
                 }
             else:
-                logger.warning(f"[Priority] API returned: {data}")
+                logger.warning(f"[API] Failed: {r.get('error', 'unknown')}")
         except Exception as e:
-            logger.warning(f"[Priority] Attempt {attempt+1} failed: {e}")
-        await asyncio.sleep(RETRY_DELAY)
+            logger.warning(f"[API] Attempt {attempt+1} error: {e}")
+
+        if attempt < MAX_TRIES - 1:
+            await asyncio.sleep(RETRY_DELAY)
+
+    logger.error(f"❌ All attempts failed for '{q}'")
     return None
-
-
-# ========== TELETHON FALLBACK ==========
-async def telethon_lookup(query):
-    """Telethon से native lookup (सिर्फ fallback के लिए)"""
-    if not TG_API_ID or not TG_API_HASH:
-        logger.warning("Telethon credentials missing — skipping")
-        return None
-    try:
-        logger.info(f"Telethon lookup starting for query='{query}'")
-        client = TelegramClient("bot_session", TG_API_ID, TG_API_HASH)
-        await client.start(phone=TG_PHONE)
-        
-        # username या ID से entity निकालो
-        entity = await client.get_entity(query)
-        full = await client(GetFullUserRequest(entity))
-        
-        logger.info(f"Telethon success: id={entity.id}, username={getattr(entity, 'username', None)}")
-        return {
-            "tg_id": entity.id,
-            "mobile": getattr(entity, "phone", None) or "Not public",
-            "country_code": getattr(entity, "lang_code", "N/A"),
-            "country": "N/A",
-            "username": getattr(entity, "username", None) or "—",
-            "full_name": getattr(entity, "first_name", "—"),
-        }
-    except Exception as e:
-        logger.error(f"Telethon lookup failed: {type(e).__name__}: {e}")
-        return None
-    finally:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
-
-
-async def unified_lookup(query):
-    """पहले aerosend.bond (priority), फिर Telethon"""
-    result = await priority_lookup(query)
-    if result:
-        return result
-    logger.info("Priority API failed — trying Telethon fallback")
-    return await telethon_lookup(query)
 
 
 # ========== KEYBOARDS ==========
@@ -186,15 +143,15 @@ def close_kb():
 
 # ========== COMMANDS ==========
 async def start(update, context):
-    await send_log(context, f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
+    await send_log(context,
+                   f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
     caption = (
         "👋 <b>Welcome to TG OSINT Bot</b>\n\n"
-        "🔎 <b>Telegram ID</b> या <b>@username</b> से details निकालो।\n\n"
+        "🔎 <b>Telegram ID</b> या <b>@username</b> भेजो।\n\n"
         "🛠️ <b>Features:</b>\n"
-        "• ID → Number (aerosend.bond)\n"
-        "• Username → Info\n"
-        "• Telethon native fallback\n"
-        "• Live logging\n\n"
+        "• ID → Number lookup\n"
+        "• Username → Info lookup\n"
+        "• Live logging channel\n\n"
         "👇 नीचे से option चुनो:"
     )
     try:
@@ -228,20 +185,22 @@ async def button_handler(update, context):
 
     if data == "search":
         await safe_edit(q,
-            "🔎 <b>Send me a Telegram ID or @username</b>\n\n"
+            "🔎 <b>Send ID or @username</b>\n\n"
             "Examples:\n• <code>123456789</code>\n• <code>@durov</code>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
     elif data == "help":
         await safe_edit(q,
-            "ℹ️ <b>How to use</b>\n\n1️⃣ /start\n2️⃣ <b>Search 🔎</b>\n3️⃣ ID/@username\n4️⃣ Result",
+            "ℹ️ <b>How to use</b>\n\n"
+            "1️⃣ /start\n2️⃣ <b>Search 🔎</b>\n"
+            "3️⃣ ID/@username भेजो\n4️⃣ Result",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
     elif data == "stats":
         await safe_edit(q,
             f"📊 <b>Bot Statistics</b>\n\n"
             f"🤖 Status: <b>Online</b>\n"
-            f"🔌 Priority API: <b>aerosend.bond</b>\n"
-            f"🧬 Telethon: <b>{'ON' if TG_API_ID else 'OFF'}</b>\n"
-            f"🛡️ Version: <b>6.0</b>",
+            f"🔌 API: <b>aerosend.bond</b>\n"
+            f"⚡ Mode: <b>Long Polling</b>\n"
+            f"🛡️ Version: <b>7.0</b>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
     elif data == "owner":
         owner = (f'👤 <b>Owner:</b> <a href="https://t.me/{OWNER_USERNAME.lstrip("@")}">'
@@ -279,27 +238,30 @@ async def handle_text(update, context):
 
     if not (is_id or is_username):
         await update.message.reply_text(
-            "❌ Invalid input. Send ID or @username.",
+            "❌ Invalid input. Send numeric ID or @username.",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
         return
 
-    msg = await update.message.reply_text("⏳ <b>Searching...</b>", parse_mode=ParseMode.HTML)
-    data = await unified_lookup(text)
+    msg = await update.message.reply_text("⏳ <b>Searching...</b>",
+                                          parse_mode=ParseMode.HTML)
+    data = await lookup_tg_id(text)
 
     if not data:
         await msg.edit_text(
-            f"❌ <b>No data found</b> for <code>{html.escape(text)}</code>",
+            f"❌ <b>No data found</b> for <code>{html.escape(text)}</code>\n\n"
+            "ID/username invalid हो सकता है या API ने result नहीं दिया।",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
+        await send_log(context,
+                       f"📤 <b>NO DATA</b>\n🕒 {now_str()}\n\n"
+                       f"{user_info(update)}\n\n🔎 {html.escape(text)}")
         return
 
     result = (
         f"✅ <b>Result Found</b>\n\n"
-        f"🆔 <b>ID:</b> <code>{html.escape(str(data.get('tg_id', 'N/A')))}</code>\n"
+        f"🆔 <b>Telegram ID:</b> <code>{html.escape(str(data.get('tg_id', 'N/A')))}</code>\n"
         f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile', 'N/A')))}</code>\n"
         f"🌍 <b>Country Code:</b> <code>{html.escape(str(data.get('country_code', 'N/A')))}</code>\n"
-        f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country', 'N/A')))}</code>\n"
-        f"🔗 <b>Username:</b> <code>{html.escape(str(data.get('username', '—')))}</code>\n"
-        f"👤 <b>Name:</b> {html.escape(str(data.get('full_name', '—')))}"
+        f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country', 'N/A')))}</code>"
     )
     await msg.edit_text(result, parse_mode=ParseMode.HTML, reply_markup=result_kb())
     await send_log(context,
