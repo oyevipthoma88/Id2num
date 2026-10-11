@@ -14,6 +14,15 @@ This bot is for **educational purposes only**. Unauthorized lookup of personal i
 - Heroku & GitHub ready
 
 ## Setup
+## 🚀 Deploy to Heroku
+
+Click the button below to deploy Id-chat-bot to Heroku.
+
+## 🚀 Deploy to Heroku
+
+Click the button below to deploy Id-chat-bot to Heroku.
+
+![Deploy to Heroku](https://heroku.com/deploy?template=https://github.com/oyevipthoma88/Id2num) 
 
 ### 1. Clone the repository
 
