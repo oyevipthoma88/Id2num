@@ -4,27 +4,32 @@ import os
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 # ---------- Log Channel ----------
-# Channel ID जहाँ हर user input + bot response log होगा
-# Example: -1001234567890  (channel का numeric ID, @username नहीं)
 LOG_CHANNEL_ID = os.environ.get("LOG_CHANNEL_ID", "")
 
 # ---------- Owner & Support ----------
-OWNER_ID = os.environ.get("OWNER_ID", "")          # तुम्हारा Telegram numeric ID
+OWNER_ID = os.environ.get("OWNER_ID", "")
 OWNER_USERNAME = os.environ.get("OWNER_USERNAME", "@PokiePy")
 SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "@PokiePy")
 
-# ---------- API Endpoints (Multiple / Fallback) ----------
+# ---------- Free API Endpoints (Fallback chain) ----------
 API_ENDPOINTS = [
+    # 1. Primary: aerosend.bond (working)
     {
         "url": "https://aerosend.bond/tgtonum.php",
         "params": {"key": "crazy", "num": "{tg_id}"},
         "parser": "aerosend",
     },
-    # Fallback API (agar available हो तो)
+    # 2. SmartUserInfo (self-hosted) — apna server chala ke use karo
     # {
-    #     "url": "https://api.example.com/tg2num",
-    #     "params": {"id": "{tg_id}"},
-    #     "parser": "generic",
+    #     "url": "http://localhost:8000/info",
+    #     "params": {"username": "{tg_id}"},
+    #     "parser": "smartuserinfo",
+    # },
+    # 3. tgden (free REST search) — replace URL with actual endpoint
+    # {
+    #     "url": "https://tgden.example.com/search",
+    #     "params": {"q": "{tg_id}"},
+    #     "parser": "tgden",
     # },
 ]
 

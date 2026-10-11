@@ -91,14 +91,37 @@ def _parse_response(endpoint: dict, data: dict) -> dict | None:
             return data
         return None
 
-    # generic parser — adjust keys as needed
-    if data.get("success") or data.get("status") in ("ok", "success"):
-        return {
-            "tg_id": data.get("tg_id") or data.get("id"),
-            "mobile": data.get("mobile") or data.get("phone"),
-            "country_code": data.get("country_code") or data.get("cc"),
-            "country": data.get("country"),
-        }
+    if parser == "smartuserinfo":
+        if data.get("success") or data.get("status") == "ok":
+            return {
+                "tg_id": data.get("id") or data.get("user_id"),
+                "mobile": data.get("phone", "N/A"),
+                "country_code": data.get("dc_location", "N/A"),
+                "country": data.get("dc_location", "N/A"),
+            }
+        return None
+
+    if parser == "tgden":
+        if data.get("results"):
+            item = data["results"][0]
+            return {
+                "tg_id": item.get("id", "N/A"),
+                "mobile": item.get("phone", "N/A"),
+                "country_code": item.get("country_code", "N/A"),
+                "country": item.get("country", "N/A"),
+            }
+        return None
+
+    if parser == "generic":
+        if data.get("success") or data.get("status") in ("ok", "success"):
+            return {
+                "tg_id": data.get("tg_id") or data.get("id"),
+                "mobile": data.get("mobile") or data.get("phone"),
+                "country_code": data.get("country_code") or data.get("cc"),
+                "country": data.get("country"),
+            }
+        return None
+
     return None
 
 
