@@ -1,0 +1,24 @@
+{
+  "name": "Id2num Bot",
+  "description": "Telegram ID to Number lookup bot",
+  "repository": "https://github.com/oyevipthoma88/Id2num",
+  "logo": "https://www.herokucdn.com/deploy/button.svg",
+  "keywords": ["telegram", "bot", "osint"],
+  "env": {
+    "BOT_TOKEN": {
+      "description": "Your Telegram Bot Token from @BotFather",
+      "required": true
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
