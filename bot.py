@@ -15,24 +15,26 @@ from telegram.ext import (
 
 from config import (
     BOT_TOKEN, LOG_CHANNEL_ID, OWNER_ID, OWNER_USERNAME,
-    SUPPORT_USERNAME, API_ENDPOINTS, MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
+    SUPPORT_USERNAME, START_IMAGE_URL, API_ENDPOINTS,
+    MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
 )
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-# ========== LOG TO CHANNEL ==========
+# ========== HELPERS ==========
 async def send_log(context, text):
     if not LOG_CHANNEL_ID:
         return
     try:
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=text,
-                                       parse_mode=ParseMode.HTML,
-                                       disable_web_page_preview=True)
+        await context.bot.send_message(
+            chat_id=LOG_CHANNEL_ID, text=text,
+            parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     except Exception as e:
-        logger.warning(f"Log channel send failed: {e}")
+        logger.warning(f"Log send failed: {e}")
 
 
 def user_info(update):
@@ -52,48 +54,41 @@ def _parse_response(endpoint, data):
     parser = endpoint.get("parser", "aerosend")
     if parser == "aerosend":
         return data if data.get("status") == "success" else None
-    if parser == "smartuserinfo":
-        if data.get("success"):
-            return {"tg_id": data.get("id"), "mobile": data.get("phone", "N/A"),
-                    "country_code": data.get("dc_location", "N/A"),
-                    "country": data.get("dc_location", "N/A")}
-        return None
-    if parser == "tguserdetails":
-        if data.get("success") or data.get("id"):
-            return {"tg_id": data.get("id"), "mobile": data.get("phone", "N/A"),
-                    "country_code": data.get("country_code", "N/A"),
-                    "country": data.get("country", "N/A")}
-        return None
     if parser == "generic":
         if data.get("success") or data.get("status") in ("ok", "success"):
-            return {"tg_id": data.get("tg_id") or data.get("id"),
-                    "mobile": data.get("mobile") or data.get("phone"),
-                    "country_code": data.get("country_code") or data.get("cc"),
-                    "country": data.get("country")}
-        return None
+            return {
+                "tg_id": data.get("tg_id") or data.get("id"),
+                "mobile": data.get("mobile") or data.get("phone"),
+                "country_code": data.get("country_code") or data.get("cc"),
+                "country": data.get("country"),
+            }
     return None
 
 
+def _is_valid_url(url):
+    """Fake example.com URLs skip karo."""
+    return "example.com" not in url and url.startswith("http")
+
+
 async def lookup_tg_id(query):
-    """query = numeric ID या @username"""
-    # Normalize
-    if query.startswith("@"):
-        query = query[1:]
+    query = query.lstrip("@")
     for endpoint in API_ENDPOINTS:
+        if not _is_valid_url(endpoint["url"]):
+            continue
         for attempt in range(MAX_TRIES):
             try:
-                params = {k: v.format(tg_id=query) for k, v in endpoint["params"].items()}
+                params = {k: v.format(query=query) for k, v in endpoint["params"].items()}
                 r = requests.get(endpoint["url"], params=params, timeout=REQUEST_TIMEOUT).json()
                 parsed = _parse_response(endpoint, r)
                 if parsed:
                     return parsed
             except Exception as e:
-                logger.warning(f"[{endpoint['url']}] attempt {attempt+1}: {e}")
+                logger.warning(f"[{endpoint['url']}] try {attempt+1}: {e}")
             await asyncio.sleep(RETRY_DELAY)
     return None
 
 
-# ========== COLORFUL KEYBOARDS ==========
+# ========== KEYBOARDS ==========
 def main_menu_kb():
     return InlineKeyboardMarkup([
         [
@@ -131,21 +126,43 @@ def result_kb():
 
 def close_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Yes, Close", callback_data="menu", style="success"),
-         InlineKeyboardButton("❌ No", callback_data="noop", style="danger")],
+        [
+            InlineKeyboardButton("✅ Yes, Close", callback_data="menu", style="success"),
+            InlineKeyboardButton("❌ No", callback_data="noop", style="danger"),
+        ],
     ])
 
 
 # ========== COMMANDS ==========
 async def start(update, context):
     await send_log(context, f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
-    await update.message.reply_text(
+
+    caption = (
         "👋 <b>Welcome to TG OSINT Bot</b>\n\n"
-        "🔎 Telegram ID या @username से details निकालो।\n"
-        "नीचे से option चुनो:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=main_menu_kb(),
+        "🔎 <b>Telegram ID</b> या <b>@username</b> से details निकालो।\n\n"
+        "🛠️ <b>Features:</b>\n"
+        "• ID → Number lookup\n"
+        "• Username → Info lookup\n"
+        "• Live logging channel\n"
+        "• Owner & Support panel\n\n"
+        "👇 नीचे से option चुनो:"
     )
+
+    # Try sending image first; fallback to text if image fails
+    try:
+        await update.message.reply_photo(
+            photo=START_IMAGE_URL,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_kb(),
+        )
+    except Exception as e:
+        logger.warning(f"Image send failed: {e}, falling back to text")
+        await update.message.reply_text(
+            caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_kb(),
+        )
 
 
 async def help_cmd(update, context):
@@ -153,12 +170,10 @@ async def help_cmd(update, context):
         "ℹ️ <b>How to use</b>\n\n"
         "1️⃣ /start भेजो\n"
         "2️⃣ <b>ID Lookup</b> या <b>Username Lookup</b> दबाओ\n"
-        "3️⃣ Numeric ID (जैसे <code>123456789</code>) या @username (जैसे <code>@durov</code>) भेजो\n"
-        "4️⃣ Result का wait करो\n\n"
+        "3️⃣ ID (जैसे <code>123456789</code>) या username (जैसे <code>@durov</code>) भेजो\n"
+        "4️⃣ Result wait करो\n\n"
         "⚠️ <b>Disclaimer:</b> केवल consent के साथ use करो।",
-        parse_mode=ParseMode.HTML,
-        reply_markup=back_kb(),
-    )
+        parse_mode=ParseMode.HTML, reply_markup=back_kb())
 
 
 # ========== BUTTON HANDLER ==========
@@ -168,60 +183,54 @@ async def button_handler(update, context):
     data = q.data
 
     await send_log(context,
-                   f"🔘 <b>Button:</b> <code>{html.escape(data)}</code>\n🕒 {now_str()}\n\n{user_info(update)}")
+                   f"🔘 <b>Button:</b> <code>{html.escape(data)}</code>\n"
+                   f"🕒 {now_str()}\n\n{user_info(update)}")
 
     if data == "lookup":
         await q.edit_message_text(
             "📝 <b>Send me a numeric Telegram ID</b>\n\nExample: <code>123456789</code>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-
     elif data == "usernamelookup":
         await q.edit_message_text(
-            "📝 <b>Send me a Telegram username</b>\n\nExample: <code>@durov</code> or <code>durov</code>",
+            "📝 <b>Send me a Telegram username</b>\n\nExample: <code>@durov</code>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-
     elif data == "help":
         await q.edit_message_text(
             "ℹ️ <b>How to use</b>\n\n"
-            "1️⃣ /start भेजो\n2️⃣ <b>ID Lookup</b> या <b>Username Lookup</b> दबाओ\n"
+            "1️⃣ /start भेजो\n2️⃣ Lookup option दबाओ\n"
             "3️⃣ ID या username भेजो\n4️⃣ Result wait करो\n\n"
             "⚠️ केवल consent के साथ use करो।",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-
     elif data == "stats":
+        active = sum(1 for e in API_ENDPOINTS if _is_valid_url(e["url"]))
         await q.edit_message_text(
-            "📊 <b>Bot Statistics</b>\n\n"
-            "🤖 Status: <b>Online</b>\n"
-            f"🔌 APIs: <b>{len(API_ENDPOINTS)} active</b>\n"
-            "⚡ Mode: <b>Long Polling</b>\n"
-            "🛡️ Version: <b>3.0</b>",
+            f"📊 <b>Bot Statistics</b>\n\n"
+            f"🤖 Status: <b>Online</b>\n"
+            f"🔌 APIs: <b>{active} active</b>\n"
+            f"⚡ Mode: <b>Long Polling</b>\n"
+            f"🛡️ Version: <b>3.1</b>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-
     elif data == "owner":
         owner = f'👤 <b>Owner:</b> <a href="https://t.me/{OWNER_USERNAME.lstrip("@")}">{html.escape(OWNER_USERNAME)}</a>' if OWNER_USERNAME else "👤 <b>Owner:</b> —"
         await q.edit_message_text(f"{owner}\n\n🛠️ Bot developed with ❤️",
                                   parse_mode=ParseMode.HTML, reply_markup=back_kb(),
                                   disable_web_page_preview=True)
-
     elif data == "support":
         sup = f'💬 <b>Support:</b> <a href="https://t.me/{SUPPORT_USERNAME.lstrip("@")}">{html.escape(SUPPORT_USERNAME)}</a>' if SUPPORT_USERNAME else "💬 <b>Support:</b> —"
-        await q.edit_message_text(f"{sup}\n\n⏰ Response time: 24 hours के अंदर",
+        await q.edit_message_text(f"{sup}\n\n⏰ Response within 24 hours",
                                   parse_mode=ParseMode.HTML, reply_markup=back_kb(),
                                   disable_web_page_preview=True)
-
     elif data == "menu":
         await q.edit_message_text("👋 <b>TG OSINT Bot</b>\n\nOption चुनो:",
                                   parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
-
     elif data == "close":
         await q.edit_message_text("❌ <b>Close bot?</b>", parse_mode=ParseMode.HTML,
                                   reply_markup=close_kb())
-
     elif data == "noop":
         await q.answer("Okay!", show_alert=False)
 
 
-# ========== TEXT HANDLER (ID + Username दोनों) ==========
+# ========== TEXT HANDLER ==========
 async def handle_text(update, context):
     text = update.message.text.strip()
 
@@ -229,16 +238,14 @@ async def handle_text(update, context):
                    f"📥 <b>USER INPUT</b>\n🕒 {now_str()}\n\n{user_info(update)}\n\n"
                    f"💬 <b>Text:</b> <code>{html.escape(text)}</code>")
 
-    # ID या Username validate करो
     is_id = text.isdigit()
     is_username = bool(re.match(r'^@?[A-Za-z][A-Za-z0-9_]{3,31}$', text))
 
     if not (is_id or is_username):
         reply = ("❌ <b>Invalid input</b>\n\n"
                  "कृपया numeric ID या @username भेजो।\n"
-                 "Example: <code>123456789</code> or <code>@durov</code>")
+                 "Example: <code>123456789</code> या <code>@durov</code>")
         await update.message.reply_text(reply, parse_mode=ParseMode.HTML, reply_markup=back_kb())
-        await send_log(context, f"📤 <b>BOT:</b> Invalid input\n🕒 {now_str()}\n\n💬 {html.escape(reply)}")
         return
 
     msg = await update.message.reply_text("⏳ <b>Looking up...</b>", parse_mode=ParseMode.HTML)
@@ -270,8 +277,9 @@ async def error_handler(update, context):
     logger.error("Exception:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
         try:
-            await context.bot.send_message(chat_id=update.effective_chat.id,
-                                           text="⚠️ कुछ गड़बड़ हो गई। थोड़ी देर बाद try करो।")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ कुछ गड़बड़ हो गई। थोड़ी देर बाद try करो।")
         except Exception:
             pass
     await send_log(context, f"🔴 <b>ERROR</b>\n🕒 {now_str()}\n\n<code>{html.escape(str(context.error))}</code>")
@@ -285,8 +293,9 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CallbackQueryHandler(button_handler,
-                                         pattern="^(lookup|usernamelookup|help|stats|owner|support|menu|close|noop)$"))
+    app.add_handler(CallbackQueryHandler(
+        button_handler,
+        pattern="^(lookup|usernamelookup|help|stats|owner|support|menu|close|noop)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
     logger.info("Bot starting...")
