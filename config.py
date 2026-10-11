@@ -7,12 +7,18 @@ SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "@PokiePy")
 START_IMAGE_URL = os.environ.get("START_IMAGE_URL",
     "https://i.ibb.co/3YvGkx7/telegram-osint.jpg")
 
-# ---------- Hody-Telepro Credentials ----------
+# ---------- Telegram API Credentials (Telethon के लिए) ----------
 TG_API_ID = int(os.environ.get("TG_API_ID", "0"))
 TG_API_HASH = os.environ.get("TG_API_HASH", "")
-TG_PHONE = os.environ.get("TG_PHONE", "")
+TG_PHONE = os.environ.get("TG_PHONE", "")  # e.g., +919876543210
 
-# ---------- Fallback HTTP API ----------
+# ---------- Priority API: aerosend.bond ----------
+PRIORITY_API = {
+    "url": "https://aerosend.bond/tgtonum.php",
+    "params": {"key": "crazy", "num": "{query}"},
+}
+
+# ---------- Fallback API (optional) ----------
 FALLBACK_API = {
     "url": "https://aerosend.bond/tgtonum.php",
     "params": {"key": "crazy", "num": "{query}"},
