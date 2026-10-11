@@ -161,16 +161,16 @@ def main_menu_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 "🔍 Lookup Telegram ID",
                 callback_data="lookup",
-                style="success",          # 🟢 green
+                         # 🟢 green
             ),
         ],
         [
-            InlineKeyboardButton("ℹ️ Help", callback_data="help", style="primary"),
-            InlineKeyboardButton("📊 Stats", callback_data="stats", style="primary"),
+            InlineKeyboardButton("ℹ️ Help", callback_data="help"),
+            InlineKeyboardButton("📊 Stats", callback_data="stats"),
         ],
         [
-            InlineKeyboardButton("👤 Owner", callback_data="owner", style="primary"),
-            InlineKeyboardButton("💬 Support", callback_data="support", style="primary"),
+            InlineKeyboardButton("👤 Owner", callback_data="owner"),
+            InlineKeyboardButton("💬 Support", callback_data="support"),
         ],
     ])
 
@@ -178,7 +178,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 def back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔙 Back to Menu", callback_data="menu", style="danger"),
+            InlineKeyboardButton("🔙 Back to Menu", callback_data="menu"),
         ],
     ])
 
@@ -186,8 +186,8 @@ def back_kb() -> InlineKeyboardMarkup:
 def lookup_result_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔍 New Lookup", callback_data="lookup", style="success"),
-            InlineKeyboardButton("🔙 Menu", callback_data="menu", style="danger"),
+            InlineKeyboardButton("🔍 New Lookup", callback_data="lookup"),
+            InlineKeyboardButton("🔙 Menu", callback_data="menu"),
         ],
     ])
 
