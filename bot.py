@@ -14,18 +14,20 @@ from telegram.ext import (
 )
 
 from config import (
-    BOT_TOKEN, LOG_CHANNEL_ID, OWNER_ID, OWNER_USERNAME,
-    SUPPORT_USERNAME, START_IMAGE_URL, API_ENDPOINTS,
-    MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
+    BOT_TOKEN, LOG_CHANNEL_ID, OWNER_USERNAME, SUPPORT_USERNAME,
+    START_IMAGE_URL, API_ENDPOINTS, MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
 )
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-# ========== HELPERS ==========
+# ---------- Helpers ----------
 async def send_log(context, text):
     if not LOG_CHANNEL_ID:
         return
@@ -49,36 +51,44 @@ def now_str():
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-# ========== API LOOKUP ==========
+async def safe_edit(query, text, **kwargs):
+    try:
+        await query.edit_message_text(text, **kwargs)
+    except Exception:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        try:
+            await query.message.chat.send_message(text, **kwargs)
+        except Exception as e:
+            logger.error(f"send fallback failed: {e}")
+
+
+# ---------- Lookup ----------
 def _parse_response(endpoint, data):
     parser = endpoint.get("parser", "aerosend")
     if parser == "aerosend":
         return data if data.get("status") == "success" else None
-    if parser == "generic":
-        if data.get("success") or data.get("status") in ("ok", "success"):
-            return {
-                "tg_id": data.get("tg_id") or data.get("id"),
-                "mobile": data.get("mobile") or data.get("phone"),
-                "country_code": data.get("country_code") or data.get("cc"),
-                "country": data.get("country"),
-            }
     return None
 
 
 def _is_valid_url(url):
-    """Fake example.com URLs skip karo."""
     return "example.com" not in url and url.startswith("http")
 
 
-async def lookup_tg_id(query):
-    query = query.lstrip("@")
+async def lookup_tg(query):
+    """ID या username — दोनों accept करता है"""
+    q = query.lstrip("@")
     for endpoint in API_ENDPOINTS:
         if not _is_valid_url(endpoint["url"]):
             continue
         for attempt in range(MAX_TRIES):
             try:
-                params = {k: v.format(query=query) for k, v in endpoint["params"].items()}
-                r = requests.get(endpoint["url"], params=params, timeout=REQUEST_TIMEOUT).json()
+                params = {k: v.format(query=q)
+                          for k, v in endpoint["params"].items()}
+                r = requests.get(endpoint["url"], params=params,
+                                 timeout=REQUEST_TIMEOUT).json()
                 parsed = _parse_response(endpoint, r)
                 if parsed:
                     return parsed
@@ -88,13 +98,10 @@ async def lookup_tg_id(query):
     return None
 
 
-# ========== KEYBOARDS ==========
+# ---------- Keyboards ----------
 def main_menu_kb():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔍 ID Lookup", callback_data="lookup", style="success"),
-            InlineKeyboardButton("👤 Username Lookup", callback_data="usernamelookup", style="primary"),
-        ],
+        [InlineKeyboardButton("Search 🔎", callback_data="search", style="success")],
         [
             InlineKeyboardButton("📊 Stats", callback_data="stats", style="primary"),
             InlineKeyboardButton("ℹ️ Help", callback_data="help", style="primary"),
@@ -103,22 +110,20 @@ def main_menu_kb():
             InlineKeyboardButton("👑 Owner", callback_data="owner", style="primary"),
             InlineKeyboardButton("💬 Support", callback_data="support", style="primary"),
         ],
-        [
-            InlineKeyboardButton("🔴 Close Menu", callback_data="close", style="danger"),
-        ],
+        [InlineKeyboardButton("🔴 Close", callback_data="close", style="danger")],
     ])
 
 
 def back_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu", style="danger")],
+        [InlineKeyboardButton("🔙 Menu", callback_data="menu", style="danger")],
     ])
 
 
 def result_kb():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔍 New Lookup", callback_data="lookup", style="success"),
+            InlineKeyboardButton("Search 🔎", callback_data="search", style="success"),
             InlineKeyboardButton("🔙 Menu", callback_data="menu", style="danger"),
         ],
     ])
@@ -127,56 +132,50 @@ def result_kb():
 def close_kb():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Yes, Close", callback_data="menu", style="success"),
+            InlineKeyboardButton("✅ Yes", callback_data="menu", style="success"),
             InlineKeyboardButton("❌ No", callback_data="noop", style="danger"),
         ],
     ])
 
 
-# ========== COMMANDS ==========
+# ---------- Commands ----------
 async def start(update, context):
-    await send_log(context, f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
+    await send_log(context,
+                   f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
 
     caption = (
         "👋 <b>Welcome to TG OSINT Bot</b>\n\n"
         "🔎 <b>Telegram ID</b> या <b>@username</b> से details निकालो।\n\n"
         "🛠️ <b>Features:</b>\n"
-        "• ID → Number lookup\n"
-        "• Username → Info lookup\n"
-        "• Live logging channel\n"
-        "• Owner & Support panel\n\n"
+        "• ID → Number\n"
+        "• Username → Info\n"
+        "• Live logging\n\n"
         "👇 नीचे से option चुनो:"
     )
 
-    # Try sending image first; fallback to text if image fails
     try:
         await update.message.reply_photo(
-            photo=START_IMAGE_URL,
-            caption=caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu_kb(),
-        )
+            photo=START_IMAGE_URL, caption=caption,
+            parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
     except Exception as e:
-        logger.warning(f"Image send failed: {e}, falling back to text")
+        logger.warning(f"Image failed: {e}")
         await update.message.reply_text(
-            caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu_kb(),
-        )
+            caption, parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_kb())
 
 
 async def help_cmd(update, context):
     await update.message.reply_text(
         "ℹ️ <b>How to use</b>\n\n"
         "1️⃣ /start भेजो\n"
-        "2️⃣ <b>ID Lookup</b> या <b>Username Lookup</b> दबाओ\n"
+        "2️⃣ <b>Search 🔎</b> दबाओ\n"
         "3️⃣ ID (जैसे <code>123456789</code>) या username (जैसे <code>@durov</code>) भेजो\n"
         "4️⃣ Result wait करो\n\n"
-        "⚠️ <b>Disclaimer:</b> केवल consent के साथ use करो।",
+        "⚠️ केवल consent के साथ use करो।",
         parse_mode=ParseMode.HTML, reply_markup=back_kb())
 
 
-# ========== BUTTON HANDLER ==========
+# ---------- Button Handler ----------
 async def button_handler(update, context):
     q = update.callback_query
     await q.answer()
@@ -186,51 +185,61 @@ async def button_handler(update, context):
                    f"🔘 <b>Button:</b> <code>{html.escape(data)}</code>\n"
                    f"🕒 {now_str()}\n\n{user_info(update)}")
 
-    if data == "lookup":
-        await q.edit_message_text(
-            "📝 <b>Send me a numeric Telegram ID</b>\n\nExample: <code>123456789</code>",
+    if data == "search":
+        await safe_edit(q,
+            "🔎 <b>Send me a Telegram ID or @username</b>\n\n"
+            "Examples:\n"
+            "• <code>123456789</code> (ID)\n"
+            "• <code>@durov</code> (username)",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
-    elif data == "usernamelookup":
-        await q.edit_message_text(
-            "📝 <b>Send me a Telegram username</b>\n\nExample: <code>@durov</code>",
-            parse_mode=ParseMode.HTML, reply_markup=back_kb())
+
     elif data == "help":
-        await q.edit_message_text(
+        await safe_edit(q,
             "ℹ️ <b>How to use</b>\n\n"
-            "1️⃣ /start भेजो\n2️⃣ Lookup option दबाओ\n"
-            "3️⃣ ID या username भेजो\n4️⃣ Result wait करो\n\n"
+            "1️⃣ /start\n2️⃣ <b>Search 🔎</b>\n"
+            "3️⃣ ID या username भेजो\n4️⃣ Result\n\n"
             "⚠️ केवल consent के साथ use करो।",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
+
     elif data == "stats":
         active = sum(1 for e in API_ENDPOINTS if _is_valid_url(e["url"]))
-        await q.edit_message_text(
+        await safe_edit(q,
             f"📊 <b>Bot Statistics</b>\n\n"
             f"🤖 Status: <b>Online</b>\n"
             f"🔌 APIs: <b>{active} active</b>\n"
             f"⚡ Mode: <b>Long Polling</b>\n"
-            f"🛡️ Version: <b>3.1</b>",
+            f"🛡️ Version: <b>3.3</b>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
+
     elif data == "owner":
-        owner = f'👤 <b>Owner:</b> <a href="https://t.me/{OWNER_USERNAME.lstrip("@")}">{html.escape(OWNER_USERNAME)}</a>' if OWNER_USERNAME else "👤 <b>Owner:</b> —"
-        await q.edit_message_text(f"{owner}\n\n🛠️ Bot developed with ❤️",
-                                  parse_mode=ParseMode.HTML, reply_markup=back_kb(),
-                                  disable_web_page_preview=True)
+        owner = (f'👤 <b>Owner:</b> <a href="https://t.me/{OWNER_USERNAME.lstrip("@")}">'
+                 f'{html.escape(OWNER_USERNAME)}</a>'
+                 if OWNER_USERNAME else "👤 <b>Owner:</b> —")
+        await safe_edit(q, f"{owner}\n\n🛠️ Developed with ❤️",
+                       parse_mode=ParseMode.HTML, reply_markup=back_kb(),
+                       disable_web_page_preview=True)
+
     elif data == "support":
-        sup = f'💬 <b>Support:</b> <a href="https://t.me/{SUPPORT_USERNAME.lstrip("@")}">{html.escape(SUPPORT_USERNAME)}</a>' if SUPPORT_USERNAME else "💬 <b>Support:</b> —"
-        await q.edit_message_text(f"{sup}\n\n⏰ Response within 24 hours",
-                                  parse_mode=ParseMode.HTML, reply_markup=back_kb(),
-                                  disable_web_page_preview=True)
+        sup = (f'💬 <b>Support:</b> <a href="https://t.me/{SUPPORT_USERNAME.lstrip("@")}">'
+               f'{html.escape(SUPPORT_USERNAME)}</a>'
+               if SUPPORT_USERNAME else "💬 <b>Support:</b> —")
+        await safe_edit(q, f"{sup}\n\n⏰ Response within 24 hours",
+                       parse_mode=ParseMode.HTML, reply_markup=back_kb(),
+                       disable_web_page_preview=True)
+
     elif data == "menu":
-        await q.edit_message_text("👋 <b>TG OSINT Bot</b>\n\nOption चुनो:",
-                                  parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+        await safe_edit(q, "👋 <b>TG OSINT Bot</b>\n\nOption चुनो:",
+                       parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+
     elif data == "close":
-        await q.edit_message_text("❌ <b>Close bot?</b>", parse_mode=ParseMode.HTML,
-                                  reply_markup=close_kb())
+        await safe_edit(q, "❌ <b>Close bot?</b>",
+                       parse_mode=ParseMode.HTML, reply_markup=close_kb())
+
     elif data == "noop":
         await q.answer("Okay!", show_alert=False)
 
 
-# ========== TEXT HANDLER ==========
+# ---------- Text Handler ----------
 async def handle_text(update, context):
     text = update.message.text.strip()
 
@@ -245,17 +254,20 @@ async def handle_text(update, context):
         reply = ("❌ <b>Invalid input</b>\n\n"
                  "कृपया numeric ID या @username भेजो।\n"
                  "Example: <code>123456789</code> या <code>@durov</code>")
-        await update.message.reply_text(reply, parse_mode=ParseMode.HTML, reply_markup=back_kb())
+        await update.message.reply_text(reply, parse_mode=ParseMode.HTML,
+                                       reply_markup=back_kb())
         return
 
-    msg = await update.message.reply_text("⏳ <b>Looking up...</b>", parse_mode=ParseMode.HTML)
-    data = await lookup_tg_id(text)
+    msg = await update.message.reply_text("⏳ <b>Searching...</b>",
+                                          parse_mode=ParseMode.HTML)
+    data = await lookup_tg(text)
 
     if not data:
         reply = (f"❌ <b>No data found</b> for <code>{html.escape(text)}</code>\n\n"
                  "ID/username invalid हो सकता है या API ने result नहीं दिया।")
         await msg.edit_text(reply, parse_mode=ParseMode.HTML, reply_markup=back_kb())
-        await send_log(context, f"📤 <b>BOT:</b> No data\n🕒 {now_str()}\n\n🔎 {html.escape(text)}")
+        await send_log(context,
+                       f"📤 <b>BOT:</b> No data\n🕒 {now_str()}\n\n🔎 {html.escape(text)}")
         return
 
     result = (
@@ -272,7 +284,7 @@ async def handle_text(update, context):
                    f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile', 'N/A')))}</code>")
 
 
-# ========== ERROR HANDLER ==========
+# ---------- Error Handler ----------
 async def error_handler(update, context):
     logger.error("Exception:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
@@ -282,10 +294,12 @@ async def error_handler(update, context):
                 text="⚠️ कुछ गड़बड़ हो गई। थोड़ी देर बाद try करो।")
         except Exception:
             pass
-    await send_log(context, f"🔴 <b>ERROR</b>\n🕒 {now_str()}\n\n<code>{html.escape(str(context.error))}</code>")
+    await send_log(context,
+                   f"🔴 <b>ERROR</b>\n🕒 {now_str()}\n\n"
+                   f"<code>{html.escape(str(context.error))}</code>")
 
 
-# ========== MAIN ==========
+# ---------- Main ----------
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logger.error("BOT_TOKEN not set!")
@@ -295,7 +309,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CallbackQueryHandler(
         button_handler,
-        pattern="^(lookup|usernamelookup|help|stats|owner|support|menu|close|noop)$"))
+        pattern="^(search|help|stats|owner|support|menu|close|noop)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
     logger.info("Bot starting...")
