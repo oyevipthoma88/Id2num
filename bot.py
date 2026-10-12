@@ -78,7 +78,9 @@ async def smart_edit(q, text, **kwargs):
         except Exception as e: logger.warning(f"send after delete: {e}")
     try: await q.edit_message_text(text, **kwargs)
     except BadRequest as e:
-        if "not modified" in str(e).lower(): return
+        err = str(e).lower()
+        if "not modified" in err: return
+        if "message to edit not found" in err: return
         try: await msg.delete()
         except Exception: pass
         try: await msg.chat.send_message(text, **kwargs)
@@ -345,9 +347,16 @@ async def start(update, context):
         if await db.set_referrer(user.id, referrer):
             await send_log(context, f"🎁 REFERRAL {user.id} ← {referrer}")
             try:
-                await context.bot.send_message(referrer,
-                    "🎉 <b>New Referral!</b>\n\n<blockquote>Progress check करने के लिए Refer & Unlock दबाओ।</blockquote>",
-                    parse_mode=ParseMode.HTML)
+                ref_cnt = await db.get_referral_count(referrer)
+                if ref_cnt >= REFERRALS_REQUIRED:
+                    msg = (f"🎉 <b>Search Unlocked!</b>\n\n<blockquote>"
+                           f"आपने <code>{ref_cnt}/{REFERRALS_REQUIRED}</code> referrals पूरे कर लिए।\n"
+                           f"अब आप search कर सकते हो!</blockquote>")
+                else:
+                    msg = (f"🎉 <b>New Referral!</b>\n\n<blockquote>"
+                           f"📊 Progress: <code>{ref_cnt}/{REFERRALS_REQUIRED}</code>\n"
+                           f"और refer करने पर unlock होगा।</blockquote>")
+                await context.bot.send_message(referrer, msg, parse_mode=ParseMode.HTML)
             except Exception: pass
     if not await require_join(update, context): return
     allowed, reason = await can_search(user.id)
@@ -382,8 +391,17 @@ async def cancel_cmd(update, context):
     await update.message.reply_text("✅ Cancelled.", reply_markup=main_menu_kb(update.effective_user.id))
 
 async def post_init(app):
-    await db.init_db()
-    logger.info("DB ready")
+    try:
+        mongo = db._get_db()
+        await mongo.command("ping")
+        logger.info("✅ MongoDB connected")
+        await db.init_db()
+    except Exception as e:
+        logger.error(f"❌ MongoDB failed: {e}")
+        raise
+
+async def post_shutdown(app):
+    await db.close_db()
     if SUPPORT_CHAT_ID:
         try:
             chat = await app.bot.get_chat(SUPPORT_CHAT_ID)
@@ -567,8 +585,10 @@ async def button_handler(update, context):
         if payment["status"] != "pending":
             await q.answer(f"⚠️ Already {payment['status']}!", show_alert=True); return
         if action == "approve":
+            ok = await db.update_payment_status(pid, "approved", user.id)
+            if not ok:
+                await q.answer("⚠️ Already processed!", show_alert=True); return
             await db.add_premium(payment["user_id"], payment["plan_days"], payment["plan_key"])
-            await db.update_payment_status(pid, "approved", user.id)
             new_text = (f"✅ <b>Payment Approved</b>\n\n<blockquote>"
                         f"👤 User: <code>{payment['user_id']}</code>\n"
                         f"💎 Plan: {db.DEFAULT_PLANS.get(payment['plan_key'], {}).get('label', payment['plan_key'])}\n"
@@ -590,7 +610,9 @@ async def button_handler(update, context):
             await send_log(context, f"✅ APPROVED {pid} → user {payment['user_id']} by {user.id}")
             await q.answer("✅ Approved & Premium activated!", show_alert=True)
         else:
-            await db.update_payment_status(pid, "declined", user.id)
+            ok = await db.update_payment_status(pid, "declined", user.id)
+            if not ok:
+                await q.answer("⚠️ Already processed!", show_alert=True); return
             new_text = (f"❌ <b>Payment Declined</b>\n\n<blockquote>"
                         f"👤 User: <code>{payment['user_id']}</code>\n"
                         f"💎 Plan: {payment['plan_key']}</blockquote>")
@@ -680,6 +702,10 @@ async def handle_photo(update, context):
         await db.set_setting("qr_file_id", photo.file_id)
         await update.message.reply_text("✅ <b>QR saved!</b> Users को payment के time दिखेगा।",
                                         parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
+        return
+
+    # Force join check
+    if not await require_join(update, context):
         return
 
     # User SS upload — DB से pending plan लो (restart-safe)
@@ -817,8 +843,11 @@ async def handle_text(update, context):
 
     allowed, reason = await can_search(user.id)
     if not allowed:
-        await update.message.reply_text(await show_referral_gate(None, user, is_edit=False),
-                                        parse_mode=ParseMode.HTML, reply_markup=referral_gate_kb()); return
+        gate_text = await show_referral_gate(None, user, is_edit=False)
+        await update.message.reply_text(gate_text,
+                                        parse_mode=ParseMode.HTML,
+                                        reply_markup=referral_gate_kb())
+        return
 
     remaining = await get_remaining(user.id)
     if remaining == 0:
@@ -878,7 +907,11 @@ async def error_handler(update, context):
 
 def main():
     if not BOT_TOKEN: logger.error("BOT_TOKEN missing!"); return
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = (Application.builder()
+           .token(BOT_TOKEN)
+           .post_init(post_init)
+           .post_shutdown(post_shutdown)
+           .build())
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))

@@ -7,6 +7,14 @@ logger = logging.getLogger("DB")
 _client = None
 _db = None
 
+async def close_db():
+    global _client, _db
+    if _client:
+        _client.close()
+        _client = None
+        _db = None
+        logger.info("MongoDB closed")
+
 def _get_db():
     global _client, _db
     if _db is None:
@@ -230,14 +238,21 @@ async def get_payment(pid):
     return await db.payments.find_one({"payment_id": pid})
 
 async def update_payment_status(pid, status, reviewed_by=None):
+    """Atomic update — only if still pending"""
     db = _get_db()
-    await db.payments.update_one({"payment_id": pid},
+    result = await db.payments.update_one(
+        {"payment_id": pid, "status": "pending"},
         {"$set": {"status": status, "reviewed_by": reviewed_by,
                   "reviewed_at": int(time.time())}})
+    return result.modified_count == 1
 
 async def get_stats():
     db = _get_db()
+    now = int(time.time())
     total = await db.users.count_documents({})
-    prem = await db.users.count_documents({"is_premium": True, "premium_until": {"$ne": 0}})
+    prem = await db.users.count_documents({
+        "is_premium": True,
+        "$or": [{"premium_until": -1}, {"premium_until": {"$gt": now}}]
+    })
     pending = await db.payments.count_documents({"status": "pending"})
     return {"total": total, "premium": prem, "pending": pending}
