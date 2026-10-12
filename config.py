@@ -7,7 +7,11 @@ SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "@PokiePy")
 START_IMAGE_URL = os.environ.get("START_IMAGE_URL",
     "https://i.ibb.co/3YvGkx7/telegram-osint.jpg")
 
-# ---------- Telegram ID → Number API (original file जैसी) ----------
+# GitHub repo
+GITHUB_URL = os.environ.get("GITHUB_URL",
+    "https://github.com/oyevipthoma88/Id2num")
+
+# Telegram ID → Number API (original file जैसी)
 API_URL = "https://aerosend.bond/tgtonum.php"
 API_KEY = "crazy"
 

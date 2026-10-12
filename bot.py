@@ -15,15 +15,12 @@ from telegram.ext import (
 
 from config import (
     BOT_TOKEN, LOG_CHANNEL_ID, OWNER_USERNAME, SUPPORT_USERNAME,
-    START_IMAGE_URL, API_URL, API_KEY,
+    START_IMAGE_URL, GITHUB_URL, API_URL, API_KEY,
     MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT,
 )
 
 # ========== LOGGING ==========
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logger = logging.getLogger("TG_OSINT")
@@ -64,12 +61,11 @@ async def safe_edit(query, text, **kwargs):
         try:
             await query.message.chat.send_message(text, **kwargs)
         except Exception as e:
-            logger.error(f"safe_edit send fallback failed: {e}")
+            logger.error(f"safe_edit fallback failed: {e}")
 
 
-# ========== API LOOKUP — बिल्कुल original file जैसा ==========
+# ========== API LOOKUP ==========
 async def lookup_tg_id(tg_id):
-    """aerosend.bond API से ID → Number lookup"""
     q = tg_id.lstrip("@")
     for attempt in range(MAX_TRIES):
         try:
@@ -80,31 +76,27 @@ async def lookup_tg_id(tg_id):
                 timeout=REQUEST_TIMEOUT,
             ).json()
             logger.info(f"[API] Response: {r}")
-
             if r.get("status") == "success":
-                logger.info(f"[API] ✅ SUCCESS")
                 return {
                     "tg_id": r.get("tg_id", q),
                     "mobile": r.get("mobile", "N/A"),
                     "country_code": r.get("country_code", "N/A"),
                     "country": r.get("country", "N/A"),
                 }
-            else:
-                logger.warning(f"[API] Failed: {r.get('error', 'unknown')}")
+            logger.warning(f"[API] Failed: {r.get('error', 'unknown')}")
         except Exception as e:
             logger.warning(f"[API] Attempt {attempt+1} error: {e}")
-
         if attempt < MAX_TRIES - 1:
             await asyncio.sleep(RETRY_DELAY)
-
-    logger.error(f"❌ All attempts failed for '{q}'")
     return None
 
 
 # ========== KEYBOARDS ==========
 def main_menu_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Search 🔎", callback_data="search", style="success")],
+        [
+            InlineKeyboardButton("Search 🔎", callback_data="search", style="success"),
+        ],
         [
             InlineKeyboardButton("📊 Stats", callback_data="stats", style="primary"),
             InlineKeyboardButton("ℹ️ Help", callback_data="help", style="primary"),
@@ -113,13 +105,19 @@ def main_menu_kb():
             InlineKeyboardButton("👑 Owner", callback_data="owner", style="primary"),
             InlineKeyboardButton("💬 Support", callback_data="support", style="primary"),
         ],
-        [InlineKeyboardButton("🔴 Close", callback_data="close", style="danger")],
+        [
+            InlineKeyboardButton("📂 Source Code", callback_data="source", style="primary"),
+            InlineKeyboardButton("👤 Profile", callback_data="profile", style="primary"),
+        ],
+        [
+            InlineKeyboardButton("🔴 Close", callback_data="close", style="danger"),
+        ],
     ])
 
 
 def back_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Menu", callback_data="menu", style="danger")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu", style="danger")],
     ])
 
 
@@ -141,19 +139,41 @@ def close_kb():
     ])
 
 
+def source_kb():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🌐 Open Repository", url=GITHUB_URL, style="success"),
+        ],
+        [
+            InlineKeyboardButton("👤 My Profile", callback_data="profile", style="primary"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Menu", callback_data="menu", style="danger"),
+        ],
+    ])
+
+
 # ========== COMMANDS ==========
 async def start(update, context):
     await send_log(context,
                    f"🟢 <b>NEW /start</b>\n🕒 {now_str()}\n\n{user_info(update)}")
+
     caption = (
         "👋 <b>Welcome to TG OSINT Bot</b>\n\n"
-        "🔎 <b>Telegram ID</b> या <b>@username</b> भेजो।\n\n"
+        "<blockquote>"
+        "🔎 <b>Telegram ID</b> या <b>@username</b> भेजो और details निकालो।\n"
+        "सब कुछ real-time, encrypted और anonymous।"
+        "</blockquote>\n\n"
         "🛠️ <b>Features:</b>\n"
-        "• ID → Number lookup\n"
-        "• Username → Info lookup\n"
-        "• Live logging channel\n\n"
+        "<blockquote>"
+        "• ID → Mobile Number\n"
+        "• Username → Profile Info\n"
+        "• Live Logging Channel\n"
+        "• Source Code Available\n"
+        "</blockquote>\n\n"
         "👇 नीचे से option चुनो:"
     )
+
     try:
         await update.message.reply_photo(
             photo=START_IMAGE_URL, caption=caption,
@@ -165,14 +185,21 @@ async def start(update, context):
 
 
 async def help_cmd(update, context):
+    text = (
+        "ℹ️ <b>How to use the bot</b>\n\n"
+        "<blockquote>"
+        "<b>Step 1:</b> /start भेजो\n"
+        "<b>Step 2:</b> <b>Search 🔎</b> button दबाओ\n"
+        "<b>Step 3:</b> Numeric ID (जैसे <code>123456789</code>) या @username (जैसे <code>@durov</code>) भेजो\n"
+        "<b>Step 4:</b> Result का इंतज़ार करो"
+        "</blockquote>\n\n"
+        "⚠️ <b>Disclaimer:</b>\n"
+        "<blockquote>"
+        "केवल consent के साथ use करो। किसी की personal info बिना permission lookup करना illegal है।"
+        "</blockquote>"
+    )
     await update.message.reply_text(
-        "ℹ️ <b>How to use</b>\n\n"
-        "1️⃣ /start भेजो\n"
-        "2️⃣ <b>Search 🔎</b> दबाओ\n"
-        "3️⃣ ID (जैसे <code>123456789</code>) या @username (जैसे <code>@durov</code>) भेजो\n"
-        "4️⃣ Result wait करो\n\n"
-        "⚠️ केवल consent के साथ use करो।",
-        parse_mode=ParseMode.HTML, reply_markup=back_kb())
+        text, parse_mode=ParseMode.HTML, reply_markup=back_kb())
 
 
 # ========== BUTTON HANDLER ==========
@@ -180,48 +207,128 @@ async def button_handler(update, context):
     q = update.callback_query
     await q.answer()
     data = q.data
+    user = update.effective_user
+
     await send_log(context,
                    f"🔘 <b>Button:</b> <code>{data}</code>\n🕒 {now_str()}\n\n{user_info(update)}")
 
     if data == "search":
         await safe_edit(q,
             "🔎 <b>Send ID or @username</b>\n\n"
-            "Examples:\n• <code>123456789</code>\n• <code>@durov</code>",
+            "<blockquote>"
+            "<b>Examples:</b>\n"
+            "• <code>123456789</code> — numeric ID\n"
+            "• <code>@durov</code> — username"
+            "</blockquote>",
             parse_mode=ParseMode.HTML, reply_markup=back_kb())
+
     elif data == "help":
-        await safe_edit(q,
+        text = (
             "ℹ️ <b>How to use</b>\n\n"
-            "1️⃣ /start\n2️⃣ <b>Search 🔎</b>\n"
-            "3️⃣ ID/@username भेजो\n4️⃣ Result",
-            parse_mode=ParseMode.HTML, reply_markup=back_kb())
+            "<blockquote>"
+            "<b>Step 1:</b> /start भेजो\n"
+            "<b>Step 2:</b> <b>Search 🔎</b> दबाओ\n"
+            "<b>Step 3:</b> ID या @username भेजो\n"
+            "<b>Step 4:</b> Result wait करो"
+            "</blockquote>\n\n"
+            "⚠️ केवल consent के साथ use करो।"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=back_kb())
+
     elif data == "stats":
-        await safe_edit(q,
-            f"📊 <b>Bot Statistics</b>\n\n"
-            f"🤖 Status: <b>Online</b>\n"
-            f"🔌 API: <b>aerosend.bond</b>\n"
-            f"⚡ Mode: <b>Long Polling</b>\n"
-            f"🛡️ Version: <b>7.0</b>",
-            parse_mode=ParseMode.HTML, reply_markup=back_kb())
+        text = (
+            "📊 <b>Bot Statistics</b>\n\n"
+            "<blockquote>"
+            "🤖 <b>Status:</b> Online\n"
+            "⚡ <b>Mode:</b> Long Polling\n"
+            "🔌 <b>Backend:</b> Active\n"
+            "📡 <b>Response Time:</b> ~2s\n"
+            "🛡️ <b>Version:</b> 9.0"
+            "</blockquote>"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=back_kb())
+
     elif data == "owner":
         owner = (f'👤 <b>Owner:</b> <a href="https://t.me/{OWNER_USERNAME.lstrip("@")}">'
                  f'{html.escape(OWNER_USERNAME)}</a>'
                  if OWNER_USERNAME else "👤 <b>Owner:</b> —")
-        await safe_edit(q, f"{owner}\n\n🛠️ Developed with ❤️",
-                        parse_mode=ParseMode.HTML, reply_markup=back_kb(),
-                        disable_web_page_preview=True)
+        text = (
+            f"👑 <b>Owner Panel</b>\n\n"
+            f"<blockquote>"
+            f"{owner}\n"
+            f"🛠️ <b>Role:</b> Developer\n"
+            f"📅 <b>Status:</b> Active"
+            f"</blockquote>\n\n"
+            f"💡 किसी भी query के लिए message करो।"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=back_kb(),
+                       disable_web_page_preview=True)
+
     elif data == "support":
         sup = (f'💬 <b>Support:</b> <a href="https://t.me/{SUPPORT_USERNAME.lstrip("@")}">'
                f'{html.escape(SUPPORT_USERNAME)}</a>'
                if SUPPORT_USERNAME else "💬 <b>Support:</b> —")
-        await safe_edit(q, f"{sup}\n\n⏰ Response within 24 hours",
-                        parse_mode=ParseMode.HTML, reply_markup=back_kb(),
-                        disable_web_page_preview=True)
+        text = (
+            f"💬 <b>Support Center</b>\n\n"
+            f"<blockquote>"
+            f"{sup}\n"
+            f"⏰ <b>Response Time:</b> 24 hours\n"
+            f"📝 <b>Issue:</b> Details के साथ message करो"
+            f"</blockquote>"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=back_kb(),
+                       disable_web_page_preview=True)
+
+    elif data == "source":
+        text = (
+            "📂 <b>Source Code</b>\n\n"
+            "<blockquote>"
+            "🔗 <b>Repository:</b> <a href=\"" + GITHUB_URL + "\">GitHub</a>\n"
+            "🛠️ <b>Language:</b> Python 3.11\n"
+            "📦 <b>Framework:</b> python-telegram-bot\n"
+            "📜 <b>License:</b> Open Source"
+            "</blockquote>\n\n"
+            "👇 नीचे से option चुनो:"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=source_kb(),
+                       disable_web_page_preview=True)
+
+    elif data == "profile":
+        uname = f"@{html.escape(user.username)}" if user.username else "<i>Not set</i>"
+        lang = html.escape(user.language_code or "—")
+        is_premium = "👑 Yes" if getattr(user, "is_premium", False) else "❌ No"
+        text = (
+            "👤 <b>Your Profile</b>\n\n"
+            "<blockquote>"
+            f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
+            f"👤 <b>Full Name:</b> {html.escape(user.full_name)}\n"
+            f"🔗 <b>Username:</b> {uname}\n"
+            f"🌐 <b>Language:</b> <code>{lang}</code>\n"
+            f"💎 <b>Premium:</b> {is_premium}\n"
+            f"🤖 <b>Is Bot:</b> {'Yes' if user.is_bot else 'No'}"
+            "</blockquote>\n\n"
+            "📅 <b>Session Info:</b>\n"
+            f"<blockquote>🕒 {now_str()}</blockquote>"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=back_kb())
+
     elif data == "menu":
-        await safe_edit(q, "👋 <b>TG OSINT Bot</b>\n\nOption चुनो:",
-                        parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+        text = (
+            "👋 <b>TG OSINT Bot</b>\n\n"
+            "<blockquote>"
+            "🔎 Main menu — option चुनो\n"
+            "📌 सारे features available हैं"
+            "</blockquote>"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+
     elif data == "close":
-        await safe_edit(q, "❌ <b>Close bot?</b>",
-                        parse_mode=ParseMode.HTML, reply_markup=close_kb())
+        text = (
+            "❌ <b>Close Menu</b>\n\n"
+            "<blockquote>क्या तुम menu बंद करना चाहते हो?</blockquote>"
+        )
+        await safe_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=close_kb())
+
     elif data == "noop":
         await q.answer("Okay!", show_alert=False)
 
@@ -229,6 +336,7 @@ async def button_handler(update, context):
 # ========== TEXT HANDLER ==========
 async def handle_text(update, context):
     text = update.message.text.strip()
+
     await send_log(context,
                    f"📥 <b>USER INPUT</b>\n🕒 {now_str()}\n\n{user_info(update)}\n\n"
                    f"💬 <code>{html.escape(text)}</code>")
@@ -237,31 +345,49 @@ async def handle_text(update, context):
     is_username = bool(re.match(r'^@?[A-Za-z][A-Za-z0-9_]{3,31}$', text))
 
     if not (is_id or is_username):
+        reply = (
+            "❌ <b>Invalid Input</b>\n\n"
+            "<blockquote>"
+            "कृपया numeric ID या @username भेजो।\n\n"
+            "<b>Examples:</b>\n"
+            "• <code>123456789</code>\n"
+            "• <code>@durov</code>"
+            "</blockquote>"
+        )
         await update.message.reply_text(
-            "❌ Invalid input. Send numeric ID or @username.",
-            parse_mode=ParseMode.HTML, reply_markup=back_kb())
+            reply, parse_mode=ParseMode.HTML, reply_markup=back_kb())
         return
 
-    msg = await update.message.reply_text("⏳ <b>Searching...</b>",
-                                          parse_mode=ParseMode.HTML)
+    msg = await update.message.reply_text(
+        "⏳ <b>Searching...</b>\n\n"
+        "<blockquote>कृपया प्रतीक्षा करें, data fetch हो रहा है...</blockquote>",
+        parse_mode=ParseMode.HTML)
+
     data = await lookup_tg_id(text)
 
     if not data:
-        await msg.edit_text(
-            f"❌ <b>No data found</b> for <code>{html.escape(text)}</code>\n\n"
-            "ID/username invalid हो सकता है या API ने result नहीं दिया।",
-            parse_mode=ParseMode.HTML, reply_markup=back_kb())
+        reply = (
+            f"❌ <b>No Data Found</b>\n\n"
+            f"<blockquote>"
+            f"🔎 <b>Query:</b> <code>{html.escape(text)}</code>\n"
+            f"💬 ID/username invalid हो सकता है या API ने result नहीं दिया।"
+            f"</blockquote>"
+        )
+        await msg.edit_text(reply, parse_mode=ParseMode.HTML, reply_markup=back_kb())
         await send_log(context,
                        f"📤 <b>NO DATA</b>\n🕒 {now_str()}\n\n"
                        f"{user_info(update)}\n\n🔎 {html.escape(text)}")
         return
 
     result = (
-        f"✅ <b>Result Found</b>\n\n"
+        "✅ <b>Result Found</b>\n\n"
+        "<blockquote>"
         f"🆔 <b>Telegram ID:</b> <code>{html.escape(str(data.get('tg_id', 'N/A')))}</code>\n"
         f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile', 'N/A')))}</code>\n"
         f"🌍 <b>Country Code:</b> <code>{html.escape(str(data.get('country_code', 'N/A')))}</code>\n"
         f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country', 'N/A')))}</code>"
+        "</blockquote>\n\n"
+        "🔒 <i>Data fetched securely</i>"
     )
     await msg.edit_text(result, parse_mode=ParseMode.HTML, reply_markup=result_kb())
     await send_log(context,
@@ -277,7 +403,9 @@ async def error_handler(update, context):
         try:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="⚠️ कुछ गड़बड़ हो गई। थोड़ी देर बाद try करो।")
+                text="⚠️ <b>Error Occurred</b>\n\n"
+                     "<blockquote>कुछ गड़बड़ हो गई। थोड़ी देर बाद try करो।</blockquote>",
+                parse_mode=ParseMode.HTML)
         except Exception:
             pass
 
@@ -292,7 +420,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CallbackQueryHandler(
         button_handler,
-        pattern="^(search|help|stats|owner|support|menu|close|noop)$"))
+        pattern="^(search|help|stats|owner|support|source|profile|menu|close|noop)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
     logger.info("Bot starting...")
