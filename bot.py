@@ -7,6 +7,7 @@ from telegram.error import BadRequest, TelegramError
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
                           ContextTypes, MessageHandler, filters)
 from config import (BOT_TOKEN, LOG_CHANNEL_ID, OWNER_ID, OWNER_USERNAME, OWNER_CONTACT,
+                    TG_API_ID, TG_API_HASH, TG_SESSION,
                     TG_SCRAPE_URL, SCRAPE_TIMEOUT, SCRAPE_UA,
                     SUPPORT_LINK, BOT_USERNAME, START_IMAGE_URL, GITHUB_URL,
                     REFERRALS_REQUIRED, FREE_SEARCHES_PER_DAY,
@@ -32,25 +33,25 @@ async def _test_api(query):
 
 
 async def safe_edit_msg(msg, text, **kwargs):
-    """Edit message safely — agar delete ho gaya to naya bhej do"""
+    """Edit message safely — bot.edit_message_text use karo (msg.edit_text nahi, warna recursion)"""
     try:
-        await safe_edit_msg(msg, text, **kwargs)
-        return msg
+        return await msg.get_bot().edit_message_text(
+            chat_id=msg.chat_id,
+            message_id=msg.message_id,
+            text=text,
+            **kwargs
+        )
     except Exception as e:
         err = str(e).lower()
         if "message to edit not found" in err or "message is not modified" in err:
-            # Naya message bhejo same chat mein
             try:
-                new_msg = await msg.chat.send_message(text, **kwargs)
-                return new_msg
+                return await msg.chat.send_message(text, **kwargs)
             except Exception as e2:
                 logger.warning(f"safe_edit_msg fallback failed: {e2}")
                 return msg
         logger.warning(f"safe_edit_msg: {e}")
         return msg
 
-
-# ===== AUTO-DELETE HELPERS (guaranteed at top) =====
 async def auto_delete_message(msg, delay=15):
     try:
         await asyncio.sleep(delay)
@@ -1548,6 +1549,84 @@ async def _source_channel_viewer(query):
     return {"source": "viewer", "ok": False}
 
 
+
+
+# ==================================================
+#        TELETHON NATIVE LOOKUP (own API)
+# ==================================================
+_telethon_client = None
+
+
+async def _get_telethon_client():
+    """Lazy Telethon client using StringSession (already authorized)"""
+    global _telethon_client
+    if _telethon_client is not None:
+        return _telethon_client
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    client = TelegramClient(
+        StringSession(TG_SESSION),
+        TG_API_ID,
+        TG_API_HASH,
+    )
+    await client.connect()
+    if not await client.is_user_authorized():
+        raise Exception("Telethon session not authorized")
+    _telethon_client = client
+    logger.info("✅ Telethon client connected")
+    return _telethon_client
+
+
+async def telethon_lookup(query):
+    """Native lookup via Telethon — returns display, username, phone (if public)"""
+    if not (TG_API_ID and TG_API_HASH and TG_SESSION):
+        return {"source": "telethon", "ok": False}
+    try:
+        client = await _get_telethon_client()
+        q = query.lstrip("@").strip()
+        if q.isdigit():
+            q = int(q)
+        entity = await client.get_entity(q)
+
+        data = {"tg_id": entity.id}
+
+        # Username
+        uname = getattr(entity, "username", None)
+        if uname:
+            data["username"] = uname
+
+        # Display name
+        first = getattr(entity, "first_name", None) or ""
+        last = getattr(entity, "last_name", None) or ""
+        title = getattr(entity, "title", None)  # channels/groups
+        if first or last:
+            data["display"] = f"{first} {last}".strip()
+        elif title:
+            data["display"] = title
+
+        # Phone (only if user is contact / public)
+        phone = getattr(entity, "phone", None)
+        if phone:
+            data["mobile"] = phone
+
+        # Bio (via GetFullUser)
+        try:
+            from telethon.tl.functions.users import GetFullUserRequest
+            if not isinstance(entity, int):
+                full = await client(GetFullUserRequest(entity))
+                if hasattr(full, "full_user") and full.full_user.about:
+                    data["bio"] = full.full_user.about
+        except Exception:
+            pass
+
+        logger.info(f"[telethon] success for {query}: id={entity.id}")
+        return {"source": "telethon", "ok": True, "data": data}
+
+    except Exception as e:
+        logger.warning(f"[telethon] {type(e).__name__}: {e}")
+        return {"source": "telethon", "ok": False}
+
+
 async def parallel_lookup(query):
     """सारे sources parallel चलाओ, results merge करो"""
     tasks = []
@@ -1557,6 +1636,8 @@ async def parallel_lookup(query):
         tasks.append(_source_tgme(query))
     if PARALLEL_SOURCES.get("channel_viewer"):
         tasks.append(_source_channel_viewer(query))
+    if TG_SESSION and TG_API_ID and TG_API_HASH:
+        tasks.append(telethon_lookup(query))
 
     if not tasks:
         tasks.append(_source_aerosend(query))

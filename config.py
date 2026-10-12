@@ -46,3 +46,9 @@ PARALLEL_SOURCES = {
     "tgme_scraper": True,    # t.me/username HTML scraper
     "channel_viewer": False,  # library immature — disabled  # telegram-channel-viewer lib
 }
+
+
+# ---------- Telethon (own Telegram API) ----------
+TG_API_ID = int(os.environ.get("TG_API_ID", "0") or "0")
+TG_API_HASH = os.environ.get("TG_API_HASH", "")
+TG_SESSION = os.environ.get("TG_SESSION", "")
