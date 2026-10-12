@@ -901,6 +901,301 @@ async def error_handler(update, context):
         except Exception: pass
 
 
+# ===== TEXT HANDLER =====
+async def handle_text(update, context):
+    user = update.effective_user
+    if not user:
+        return
+
+    chat = update.effective_chat
+    is_group = chat.type in ("group", "supergroup")
+    text = (update.message.text or "").strip()
+
+    # ==================== GROUP FILTER ====================
+    if is_group:
+        if text.startswith("/"):
+            return
+
+        own_bot = BOT_USERNAME.lstrip("@").lower() if BOT_USERNAME else ""
+        clean = text
+        if own_bot:
+            clean = re.sub(rf"@{re.escape(own_bot)}\b", "", clean,
+                          flags=re.IGNORECASE).strip()
+
+        tokens = clean.split()
+        if len(tokens) != 1:
+            return
+
+        token = tokens[0].strip()
+        if not token:
+            return
+
+        is_user = bool(re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{3,31}", token))
+        is_id = bool(re.fullmatch(r"\d{5,15}", token))
+        if not (is_user or is_id):
+            return
+
+        query = token
+
+        allowed, _ = await can_search(user.id)
+        if not allowed:
+            warn = await update.message.reply_text(
+                f"🔒 <b>@{html.escape(user.username or user.first_name)}</b>, "
+                f"search locked — bot ko private mein open karo.",
+                parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            schedule_delete(context, warn, 15)
+            return
+
+        remaining = await get_remaining(user.id)
+        if remaining == 0:
+            warn = await update.message.reply_text(
+                f"⏰ <b>@{html.escape(user.username or user.first_name)}</b>, "
+                f"daily limit puri. Premium lo.",
+                parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            schedule_delete(context, warn, 15)
+            return
+
+        msg = await update.message.reply_text(
+            f"⏳ <b>Scanning</b> <code>{html.escape(query)}</code>...",
+            parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+        profile = None
+        if query.startswith("@"):
+            try:
+                profile = await scrape_username(query)
+            except Exception as e:
+                logger.warning(f"scrape: {e}")
+
+        try:
+            result = await parallel_lookup(query)
+        except Exception:
+            result = await lookup_tg_id(query)
+
+        data = result.get("data", {}) if isinstance(result, dict) else {}
+        try:
+            await record_search(user.id)
+        except Exception:
+            pass
+
+        lines = []
+        if profile:
+            if profile.get("display"):
+                lines.append(f"👤 <b>Name:</b> {html.escape(profile['display'])}")
+            if profile.get("username"):
+                lines.append(f"🔗 <b>Username:</b> @{html.escape(profile['username'])}")
+            if profile.get("bio"):
+                bio_s = profile["bio"][:120] + ("..." if len(profile["bio"]) > 120 else "")
+                lines.append(f"📝 <b>Bio:</b> <i>{html.escape(bio_s)}</i>")
+        if data.get("mobile") and data["mobile"] not in ("N/A", "", None):
+            lines.append(f"📱 <b>Mobile:</b> <code>{html.escape(str(data['mobile']))}</code>")
+        if data.get("country_code") and data["country_code"] not in ("N/A", "", None):
+            lines.append(f"🌍 <b>Country:</b> <code>{html.escape(str(data['country_code']))}</code>")
+
+        if not lines:
+            await msg.edit_text(
+                f"❌ <b>No data found</b> for <code>{html.escape(query)}</code>",
+                parse_mode=ParseMode.HTML)
+            schedule_delete(context, msg, 15)
+            return
+
+        result_text = (
+            f"✅ <b>Result for</b> <code>{html.escape(query)}</code>\n\n"
+            "<blockquote>" + "\n".join(lines) + "</blockquote>"
+            + bot_signature())
+        await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
+                           disable_web_page_preview=True)
+        schedule_delete(context, msg, 15)
+
+        await send_log(context,
+            f"🔍 <b>GROUP SCAN</b>\n🕒 {now_str()}\n\n"
+            f"👤 {user_info(update)}\n"
+            f"📍 {html.escape(chat.title or str(chat.id))}\n"
+            f"🎯 <code>{html.escape(query)}</code>")
+        return
+
+    # ==================== PRIVATE CHAT ====================
+    awaiting = context.user_data.get("awaiting")
+
+    await send_log(context,
+                   f"📥 INPUT\n🕒 {now_str()}\n\n{user_info(update)}\n\n"
+                   f"💬 <code>{html.escape(text)}</code>")
+
+    if awaiting == "redeem_code":
+        context.user_data.pop("awaiting", None)
+        days, err = await db.redeem_coupon(user.id, text)
+        if err == "invalid":
+            await update.message.reply_text("❌ Invalid code.", reply_markup=back_kb()); return
+        if err == "exhausted":
+            await update.message.reply_text("❌ Code exhausted.", reply_markup=back_kb()); return
+        if err == "already":
+            await update.message.reply_text("❌ Already used.", reply_markup=back_kb()); return
+        await db.add_premium(user.id, days, "redeem")
+        until = await db.premium_until(user.id)
+        dt = "Lifetime" if until == -1 else datetime.utcfromtimestamp(until).strftime("%Y-%m-%d")
+        await update.message.reply_text(
+            f"✅ <b>Code Redeemed!</b>\n\n<blockquote>💎 Premium Active\n"
+            f"📅 Valid: <code>{dt}</code>\n🎉 +{days} days</blockquote>" + bot_signature(),
+            parse_mode=ParseMode.HTML, reply_markup=main_menu_kb(user.id))
+        return
+
+    if awaiting and awaiting.startswith("setprice_") and OWNER_ID and user.id == OWNER_ID:
+        plan_key = awaiting[len("setprice_"):]
+        context.user_data.pop("awaiting", None)
+        await db.set_setting(f"price_{plan_key}", text)
+        label = db.DEFAULT_PLANS.get(plan_key, {}).get("label", plan_key)
+        await update.message.reply_text(
+            f"✅ <b>Price set for {label}:</b> <code>{html.escape(text)}</code>",
+            parse_mode=ParseMode.HTML, reply_markup=await owner_prices_kb())
+        return
+
+    if awaiting == "owner_gift" and OWNER_ID and user.id == OWNER_ID:
+        context.user_data.pop("awaiting", None)
+        parts = text.split()
+        if len(parts) != 2 or not parts[0].isdigit() or parts[1] not in db.PLAN_DAYS:
+            await update.message.reply_text(
+                "❌ Format: <code>user_id plan_key</code>",
+                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb()); return
+        target, plan_key = int(parts[0]), parts[1]
+        days = db.PLAN_DAYS[plan_key]
+        await db.add_premium(target, days, plan_key)
+        until = await db.premium_until(target)
+        dt = "Lifetime" if until == -1 else datetime.utcfromtimestamp(until).strftime("%Y-%m-%d")
+        await update.message.reply_text(
+            f"✅ Gifted <b>{db.DEFAULT_PLANS[plan_key]['label']}</b> to <code>{target}</code>\nValid: {dt}",
+            parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
+        try:
+            await context.bot.send_message(target,
+                f"🎁 <b>Premium Gifted!</b>\n\n<blockquote>Owner ने आपको "
+                f"<b>{db.DEFAULT_PLANS[plan_key]['label']}</b> Premium gift किया!\n📅 {dt}</blockquote>",
+                parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        return
+
+    if awaiting == "owner_coupon" and OWNER_ID and user.id == OWNER_ID:
+        context.user_data.pop("awaiting", None)
+        parts = text.split()
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await update.message.reply_text(
+                "❌ Format: <code>CODE days max_uses</code>",
+                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb()); return
+        code, days, mx = parts[0].upper(), int(parts[1]), int(parts[2])
+        ok = await db.create_coupon(code, days, mx, user.id)
+        if ok:
+            await update.message.reply_text(
+                f"✅ <b>Coupon Created</b>\n\n<blockquote>🎟️ <code>{code}</code>\n"
+                f"📅 {days} days\n🔢 Max: {mx}</blockquote>",
+                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
+        else:
+            await update.message.reply_text("❌ Code already exists.", reply_markup=await owner_panel_kb())
+        return
+
+    if not await require_join(update, context):
+        return
+
+    is_id = text.isdigit()
+    is_username = bool(re.match(r'^@?[A-Za-z][A-Za-z0-9_]{3,31}$', text))
+    if not (is_id or is_username):
+        await update.message.reply_text(
+            "❌ <b>Invalid</b>\n\n<blockquote>ID या @username भेजो।</blockquote>" + bot_signature(),
+            parse_mode=ParseMode.HTML, reply_markup=back_kb()); return
+
+    allowed, _ = await can_search(user.id)
+    if not allowed:
+        gate = await show_referral_gate(None, user, is_edit=False)
+        await update.message.reply_text(gate, parse_mode=ParseMode.HTML,
+                                        reply_markup=referral_gate_kb())
+        return
+
+    remaining = await get_remaining(user.id)
+    if remaining == 0:
+        await update.message.reply_text(
+            f"⏰ <b>Daily Limit</b>\n\n<blockquote>{FREE_SEARCHES_PER_DAY} searches पूरे।"
+            f"</blockquote>" + bot_signature(), parse_mode=ParseMode.HTML); return
+
+    msg = await update.message.reply_text(
+        "⏳ <b>Searching...</b>\n\n<blockquote>Data fetch हो रहा है...</blockquote>",
+        parse_mode=ParseMode.HTML)
+
+    profile = None
+    if not is_id:
+        try:
+            profile = await scrape_username(text)
+        except Exception:
+            profile = None
+
+    try:
+        result = await parallel_lookup(text)
+    except Exception:
+        result = await lookup_tg_id(text)
+
+    data = result.get("data", {}) if isinstance(result, dict) else {}
+
+    if not data and not profile:
+        err = result.get("error", "No data found") if isinstance(result, dict) else "No data"
+        await msg.edit_text(
+            f"❌ <b>No Data Found</b>\n\n<blockquote>🔎 <code>{html.escape(text)}</code>\n"
+            f"⚠️ <i>{html.escape(str(err))}</i>\n\n💡 5-10 मिनट बाद Retry करो।</blockquote>"
+            + bot_signature(), parse_mode=ParseMode.HTML, reply_markup=no_data_kb()); return
+
+    await record_search(user.id)
+    new_rem = await get_remaining(user.id)
+    rem_line = ("👑 <b>Unlimited</b>" if (OWNER_ID and user.id == OWNER_ID)
+                else ("💎 <b>Unlimited</b>" if await db.is_premium(user.id)
+                      else f"📊 <b>Remaining:</b> <code>{new_rem}/{FREE_SEARCHES_PER_DAY}</code>"))
+
+    copy_lines = []
+    if profile:
+        if profile.get("display"): copy_lines.append(f"👤 Name: {profile['display']}")
+        if profile.get("username"): copy_lines.append(f"🔗 Username: @{profile['username']}")
+        if profile.get("bio"): copy_lines.append(f"📝 Bio: {profile['bio'][:150]}")
+        if profile.get("profile_url"): copy_lines.append(f"🌐 Profile: {profile['profile_url']}")
+    if data.get("mobile") and data["mobile"] != "N/A":
+        copy_lines.append(f"📱 Mobile: {data['mobile']}")
+    if data.get("country_code") and data["country_code"] != "N/A":
+        copy_lines.append(f"🌍 Country: {data['country_code']}")
+    if SUPPORT_DISPLAY and SUPPORT_DISPLAY != "—":
+        copy_lines.append(f"📢 Channel: {SUPPORT_DISPLAY}")
+    if BOT_USERNAME:
+        copy_lines.append(f"🤖 Bot: {BOT_USERNAME}")
+    copy_text = "\n".join(copy_lines)
+
+    result_lines = []
+    if profile:
+        result_lines.append("👤 <b>Profile</b>")
+        if profile.get("display"):
+            result_lines.append(f"👤 <b>Name:</b> {html.escape(profile['display'])}")
+        if profile.get("username"):
+            result_lines.append(f"🔗 <b>Username:</b> @{html.escape(profile['username'])}")
+        if profile.get("bio"):
+            result_lines.append(f"📝 <b>Bio:</b> <i>{html.escape(profile['bio'][:200])}</i>")
+        result_lines.append("")
+
+    result_lines.append("📱 <b>Phone Info</b>")
+    if data.get("mobile") and data["mobile"] != "N/A":
+        result_lines.append(f"📱 <b>Mobile:</b> <code>{html.escape(str(data['mobile']))}</code>")
+    if data.get("country_code") and data["country_code"] != "N/A":
+        result_lines.append(f"🌍 <b>Country:</b> <code>{html.escape(str(data['country_code']))}</code>")
+
+    result_text = ("✅ <b>Result Found</b>\n\n<blockquote>"
+                   + "\n".join(result_lines)
+                   + f"</blockquote>\n\n{rem_line}\n🔒 <i>Secure</i>" + bot_signature())
+
+    if profile and profile.get("avatar_url"):
+        try:
+            await msg.delete()
+            await update.message.reply_photo(
+                photo=profile["avatar_url"], caption=result_text,
+                parse_mode=ParseMode.HTML, reply_markup=result_kb(copy_text))
+            return
+        except Exception as e:
+            logger.warning(f"avatar: {e}")
+
+    await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
+                        reply_markup=result_kb(copy_text))
+
+
+
 def main():
     if not BOT_TOKEN: logger.error("BOT_TOKEN missing!"); return
     app = (Application.builder()
@@ -1196,311 +1491,6 @@ def schedule_delete(context, msg, delay=15):
 
 
 # ===== TEXT HANDLER =====
-async def handle_text(update, context):
-    user = update.effective_user
-    if not user:
-        return
-
-    chat = update.effective_chat
-    is_group = chat.type in ("group", "supergroup")
-    text = (update.message.text or "").strip()
-
-    # ==================== GROUP FILTER ====================
-    if is_group:
-        # 1. Commands ignore
-        if text.startswith("/"):
-            return
-
-        # 2. Bot mention strip
-        own_bot = BOT_USERNAME.lstrip("@").lower() if BOT_USERNAME else ""
-        clean = text
-        if own_bot:
-            clean = re.sub(rf"@{re.escape(own_bot)}\b", "", clean,
-                          flags=re.IGNORECASE).strip()
-
-        # 3. STRICT: exactly ONE token
-        tokens = clean.split()
-        if len(tokens) != 1:
-            return
-
-        token = tokens[0].strip()
-        if not token:
-            return
-
-        # 4. STRICT: @username OR numeric ID
-        is_user = bool(re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{3,31}", token))
-        is_id = bool(re.fullmatch(r"\d{5,15}", token))
-        if not (is_user or is_id):
-            return
-
-        query = token
-
-        # 5. Access
-        allowed, _ = await can_search(user.id)
-        if not allowed:
-            warn = await update.message.reply_text(
-                f"🔒 <b>@{html.escape(user.username or user.first_name)}</b>, "
-                f"search locked — bot ko private mein open karo.",
-                parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            schedule_delete(context, warn, 15)
-            return
-
-        remaining = await get_remaining(user.id)
-        if remaining == 0:
-            warn = await update.message.reply_text(
-                f"⏰ <b>@{html.escape(user.username or user.first_name)}</b>, "
-                f"daily limit puri. Premium lo.",
-                parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            schedule_delete(context, warn, 15)
-            return
-
-        # 6. Scanning message
-        msg = await update.message.reply_text(
-            f"⏳ <b>Scanning</b> <code>{html.escape(query)}</code>...",
-            parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-
-        # 7. Lookup
-        profile = None
-        if query.startswith("@"):
-            try:
-                profile = await scrape_username(query)
-            except Exception as e:
-                logger.warning(f"scrape: {e}")
-
-        try:
-            result = await parallel_lookup(query)
-        except Exception:
-            result = await lookup_tg_id(query)
-
-        data = result.get("data", {}) if isinstance(result, dict) else {}
-        try:
-            await record_search(user.id)
-        except Exception:
-            pass
-
-        # 8. Build lines
-        lines = []
-        if profile:
-            if profile.get("display"):
-                lines.append(f"👤 <b>Name:</b> {html.escape(profile['display'])}")
-            if profile.get("username"):
-                lines.append(f"🔗 <b>Username:</b> @{html.escape(profile['username'])}")
-            if profile.get("bio"):
-                bio_s = profile["bio"][:120] + ("..." if len(profile["bio"]) > 120 else "")
-                lines.append(f"📝 <b>Bio:</b> <i>{html.escape(bio_s)}</i>")
-        if data.get("mobile") and data["mobile"] not in ("N/A", "", None):
-            lines.append(f"📱 <b>Mobile:</b> <code>{html.escape(str(data['mobile']))}</code>")
-        if data.get("country_code") and data["country_code"] not in ("N/A", "", None):
-            lines.append(f"🌍 <b>Country:</b> <code>{html.escape(str(data['country_code']))}</code>")
-
-        if not lines:
-            await msg.edit_text(
-                f"❌ <b>No data found</b> for <code>{html.escape(query)}</code>",
-                parse_mode=ParseMode.HTML)
-            schedule_delete(context, msg, 15)
-            return
-
-        result_text = (
-            f"✅ <b>Result for</b> <code>{html.escape(query)}</code>\n\n"
-            "<blockquote>" + "\n".join(lines) + "</blockquote>"
-            + bot_signature())
-        await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
-                           disable_web_page_preview=True)
-        schedule_delete(context, msg, 15)
-
-        await send_log(context,
-            f"🔍 <b>GROUP SCAN</b>\n🕒 {now_str()}\n\n"
-            f"👤 {user_info(update)}\n"
-            f"📍 {html.escape(chat.title or str(chat.id))}\n"
-            f"🎯 <code>{html.escape(query)}</code>")
-        return
-
-    # ==================== PRIVATE CHAT ====================
-    awaiting = context.user_data.get("awaiting")
-
-    await send_log(context,
-                   f"📥 INPUT\n🕒 {now_str()}\n\n{user_info(update)}\n\n"
-                   f"💬 <code>{html.escape(text)}</code>")
-
-    # Redeem
-    if awaiting == "redeem_code":
-        context.user_data.pop("awaiting", None)
-        days, err = await db.redeem_coupon(user.id, text)
-        if err == "invalid":
-            await update.message.reply_text("❌ Invalid code.", reply_markup=back_kb()); return
-        if err == "exhausted":
-            await update.message.reply_text("❌ Code exhausted.", reply_markup=back_kb()); return
-        if err == "already":
-            await update.message.reply_text("❌ Already used.", reply_markup=back_kb()); return
-        await db.add_premium(user.id, days, "redeem")
-        until = await db.premium_until(user.id)
-        dt = "Lifetime" if until == -1 else datetime.utcfromtimestamp(until).strftime("%Y-%m-%d")
-        await update.message.reply_text(
-            f"✅ <b>Code Redeemed!</b>\n\n<blockquote>💎 Premium Active\n"
-            f"📅 Valid: <code>{dt}</code>\n🎉 +{days} days</blockquote>" + bot_signature(),
-            parse_mode=ParseMode.HTML, reply_markup=main_menu_kb(user.id))
-        return
-
-    # Owner: set price
-    if awaiting and awaiting.startswith("setprice_") and OWNER_ID and user.id == OWNER_ID:
-        plan_key = awaiting[len("setprice_"):]
-        context.user_data.pop("awaiting", None)
-        await db.set_setting(f"price_{plan_key}", text)
-        label = db.DEFAULT_PLANS.get(plan_key, {}).get("label", plan_key)
-        await update.message.reply_text(
-            f"✅ <b>Price set for {label}:</b> <code>{html.escape(text)}</code>",
-            parse_mode=ParseMode.HTML, reply_markup=await owner_prices_kb())
-        return
-
-    # Owner: gift premium
-    if awaiting == "owner_gift" and OWNER_ID and user.id == OWNER_ID:
-        context.user_data.pop("awaiting", None)
-        parts = text.split()
-        if len(parts) != 2 or not parts[0].isdigit() or parts[1] not in db.PLAN_DAYS:
-            await update.message.reply_text(
-                "❌ Format: <code>user_id plan_key</code>",
-                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb()); return
-        target, plan_key = int(parts[0]), parts[1]
-        days = db.PLAN_DAYS[plan_key]
-        await db.add_premium(target, days, plan_key)
-        until = await db.premium_until(target)
-        dt = "Lifetime" if until == -1 else datetime.utcfromtimestamp(until).strftime("%Y-%m-%d")
-        await update.message.reply_text(
-            f"✅ Gifted <b>{db.DEFAULT_PLANS[plan_key]['label']}</b> to <code>{target}</code>\nValid: {dt}",
-            parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
-        try:
-            await context.bot.send_message(target,
-                f"🎁 <b>Premium Gifted!</b>\n\n<blockquote>Owner ने आपको "
-                f"<b>{db.DEFAULT_PLANS[plan_key]['label']}</b> Premium gift किया!\n📅 {dt}</blockquote>",
-                parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
-        return
-
-    # Owner: create coupon
-    if awaiting == "owner_coupon" and OWNER_ID and user.id == OWNER_ID:
-        context.user_data.pop("awaiting", None)
-        parts = text.split()
-        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
-            await update.message.reply_text(
-                "❌ Format: <code>CODE days max_uses</code>",
-                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb()); return
-        code, days, mx = parts[0].upper(), int(parts[1]), int(parts[2])
-        ok = await db.create_coupon(code, days, mx, user.id)
-        if ok:
-            await update.message.reply_text(
-                f"✅ <b>Coupon Created</b>\n\n<blockquote>🎟️ <code>{code}</code>\n"
-                f"📅 {days} days\n🔢 Max: {mx}</blockquote>",
-                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
-        else:
-            await update.message.reply_text("❌ Code already exists.", reply_markup=await owner_panel_kb())
-        return
-
-    if not await require_join(update, context):
-        return
-
-    # Search validation
-    is_id = text.isdigit()
-    is_username = bool(re.match(r'^@?[A-Za-z][A-Za-z0-9_]{3,31}$', text))
-    if not (is_id or is_username):
-        await update.message.reply_text(
-            "❌ <b>Invalid</b>\n\n<blockquote>ID या @username भेजो।</blockquote>" + bot_signature(),
-            parse_mode=ParseMode.HTML, reply_markup=back_kb()); return
-
-    allowed, _ = await can_search(user.id)
-    if not allowed:
-        gate = await show_referral_gate(None, user, is_edit=False)
-        await update.message.reply_text(gate, parse_mode=ParseMode.HTML,
-                                        reply_markup=referral_gate_kb())
-        return
-
-    remaining = await get_remaining(user.id)
-    if remaining == 0:
-        await update.message.reply_text(
-            f"⏰ <b>Daily Limit</b>\n\n<blockquote>{FREE_SEARCHES_PER_DAY} searches पूरे।"
-            f"</blockquote>" + bot_signature(), parse_mode=ParseMode.HTML); return
-
-    msg = await update.message.reply_text(
-        "⏳ <b>Searching...</b>\n\n<blockquote>Data fetch हो रहा है...</blockquote>",
-        parse_mode=ParseMode.HTML)
-
-    profile = None
-    if not is_id:
-        try:
-            profile = await scrape_username(text)
-        except Exception:
-            profile = None
-
-    try:
-        result = await parallel_lookup(text)
-    except Exception:
-        result = await lookup_tg_id(text)
-
-    data = result.get("data", {}) if isinstance(result, dict) else {}
-
-    if not data and not profile:
-        err = result.get("error", "No data found") if isinstance(result, dict) else "No data"
-        await msg.edit_text(
-            f"❌ <b>No Data Found</b>\n\n<blockquote>🔎 <code>{html.escape(text)}</code>\n"
-            f"⚠️ <i>{html.escape(str(err))}</i>\n\n💡 5-10 मिनट बाद Retry करो।</blockquote>"
-            + bot_signature(), parse_mode=ParseMode.HTML, reply_markup=no_data_kb()); return
-
-    await record_search(user.id)
-    new_rem = await get_remaining(user.id)
-    rem_line = ("👑 <b>Unlimited</b>" if (OWNER_ID and user.id == OWNER_ID)
-                else ("💎 <b>Unlimited</b>" if await db.is_premium(user.id)
-                      else f"📊 <b>Remaining:</b> <code>{new_rem}/{FREE_SEARCHES_PER_DAY}</code>"))
-
-    copy_lines = []
-    if profile:
-        if profile.get("display"): copy_lines.append(f"👤 Name: {profile['display']}")
-        if profile.get("username"): copy_lines.append(f"🔗 Username: @{profile['username']}")
-        if profile.get("bio"): copy_lines.append(f"📝 Bio: {profile['bio'][:150]}")
-        if profile.get("profile_url"): copy_lines.append(f"🌐 Profile: {profile['profile_url']}")
-    if data.get("mobile") and data["mobile"] != "N/A":
-        copy_lines.append(f"📱 Mobile: {data['mobile']}")
-    if data.get("country_code") and data["country_code"] != "N/A":
-        copy_lines.append(f"🌍 Country: {data['country_code']}")
-    if SUPPORT_DISPLAY and SUPPORT_DISPLAY != "—":
-        copy_lines.append(f"📢 Channel: {SUPPORT_DISPLAY}")
-    if BOT_USERNAME:
-        copy_lines.append(f"🤖 Bot: {BOT_USERNAME}")
-    copy_text = "\n".join(copy_lines)
-
-    result_lines = []
-    if profile:
-        result_lines.append("👤 <b>Profile</b>")
-        if profile.get("display"):
-            result_lines.append(f"👤 <b>Name:</b> {html.escape(profile['display'])}")
-        if profile.get("username"):
-            result_lines.append(f"🔗 <b>Username:</b> @{html.escape(profile['username'])}")
-        if profile.get("bio"):
-            result_lines.append(f"📝 <b>Bio:</b> <i>{html.escape(profile['bio'][:200])}</i>")
-        result_lines.append("")
-
-    result_lines.append("📱 <b>Phone Info</b>")
-    if data.get("mobile") and data["mobile"] != "N/A":
-        result_lines.append(f"📱 <b>Mobile:</b> <code>{html.escape(str(data['mobile']))}</code>")
-    if data.get("country_code") and data["country_code"] != "N/A":
-        result_lines.append(f"🌍 <b>Country:</b> <code>{html.escape(str(data['country_code']))}</code>")
-
-    result_text = ("✅ <b>Result Found</b>\n\n<blockquote>"
-                   + "\n".join(result_lines)
-                   + f"</blockquote>\n\n{rem_line}\n🔒 <i>Secure</i>" + bot_signature())
-
-    if profile and profile.get("avatar_url"):
-        try:
-            await msg.delete()
-            await update.message.reply_photo(
-                photo=profile["avatar_url"], caption=result_text,
-                parse_mode=ParseMode.HTML, reply_markup=result_kb(copy_text))
-            return
-        except Exception as e:
-            logger.warning(f"avatar: {e}")
-
-    await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
-                        reply_markup=result_kb(copy_text))
-
 
 if __name__ == "__main__":
     main()
