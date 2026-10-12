@@ -44,5 +44,5 @@ SCRAPE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 PARALLEL_SOURCES = {
     "aerosend": True,        # ID → Number API (HTTP)
     "tgme_scraper": True,    # t.me/username HTML scraper
-    "channel_viewer": True,  # telegram-channel-viewer lib
+    "channel_viewer": False,  # library immature — disabled  # telegram-channel-viewer lib
 }
