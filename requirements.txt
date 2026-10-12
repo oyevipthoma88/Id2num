@@ -4,4 +4,5 @@ motor==3.6.0
 pymongo[srv]==4.9.0
 dnspython==2.7.0
 telethon==1.36.0
+hody-telepro[full]
 beautifulsoup4==4.12.3
