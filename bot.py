@@ -51,6 +51,15 @@ async def send_log(context, text):
     except Exception as e:
         logger.warning(f"log: {e}")
 
+async def auto_delete_message(msg, delay=15):
+    """Message को delay सेकंड बाद auto-delete करो"""
+    try:
+        await asyncio.sleep(delay)
+        await msg.delete()
+    except Exception as e:
+        logger.debug(f"auto_delete skipped: {e}")
+
+
 def user_info(update):
     u = update.effective_user
     if not u: return "<i>unknown</i>"
