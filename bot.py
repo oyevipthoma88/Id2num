@@ -7,6 +7,7 @@ from telegram.error import BadRequest, TelegramError
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
                           ContextTypes, MessageHandler, filters)
 from config import (BOT_TOKEN, LOG_CHANNEL_ID, OWNER_ID, OWNER_USERNAME, OWNER_CONTACT,
+                    TG_SCRAPE_URL, SCRAPE_TIMEOUT, SCRAPE_UA,
                     SUPPORT_LINK, BOT_USERNAME, START_IMAGE_URL, GITHUB_URL,
                     REFERRALS_REQUIRED, FREE_SEARCHES_PER_DAY,
                     API_URL, API_KEY, MAX_TRIES, RETRY_DELAY, REQUEST_TIMEOUT)
@@ -170,6 +171,52 @@ async def lookup_tg_id(tg_id):
             last_err = str(e); logger.warning(f"[API] {i+1}: {e}")
         if i < MAX_TRIES - 1: await asyncio.sleep(RETRY_DELAY)
     return {"ok": False, "error": last_err or "Unknown"}
+
+
+
+# ===== USERNAME PROFILE SCRAPER =====
+def _scrape_meta(html, prop, attr="property"):
+    """Extract meta tag content (og: or twitter:)"""
+    pattern = rf'<meta[^>]+{attr}=["\'](?:og:|twitter:)?{prop}["\'][^>]+content=["\']([^"\']*)["\']'
+    m = re.search(pattern, html, re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+async def scrape_username(username):
+    """t.me/username से profile data निकालो"""
+    u = username.lstrip("@").strip()
+    if not u:
+        return None
+    try:
+        url = TG_SCRAPE_URL.format(username=u)
+        r = requests.get(url, timeout=SCRAPE_TIMEOUT,
+                         headers={"User-Agent": SCRAPE_UA})
+        r.raise_for_status()
+        html = r.text
+
+        def og(prop):
+            m = re.search(
+                rf'<meta[^>]+property=["\']og:{prop}["\'][^>]+content=["\']([^"\']*)["\']',
+                html, re.IGNORECASE)
+            return m.group(1).strip() if m else None
+
+        def tw(prop):
+            m = re.search(
+                rf'<meta[^>]+name=["\']twitter:{prop}["\'][^>]+content=["\']([^"\']*)["\']',
+                html, re.IGNORECASE)
+            return m.group(1).strip() if m else None
+
+        return {
+            "username": u,
+            "display": og("title") or tw("title"),
+            "bio": og("description") or tw("description"),
+            "avatar_url": og("image") or tw("image"),
+            "profile_url": url,
+        }
+    except Exception as e:
+        logger.warning(f"scrape_username failed: {e}")
+        return None
+
 
 # ===== ACCESS =====
 async def can_search(user_id):
@@ -1193,24 +1240,87 @@ async def handle_text(update, context):
             + bot_signature(), parse_mode=ParseMode.HTML, reply_markup=no_data_kb()); return
 
     data = result["data"]
+
+    # अगर username है तो profile scrape भी करो
+    profile = None
+    if not text.isdigit():
+        profile = await scrape_username(text)
+
     await record_search(user.id)
     new_rem = await get_remaining(user.id)
     rem_line = ("👑 <b>Unlimited</b>" if (OWNER_ID and user.id == OWNER_ID)
                 else ("💎 <b>Unlimited</b>" if await db.is_premium(user.id)
                       else f"📊 <b>Remaining:</b> <code>{new_rem}/{FREE_SEARCHES_PER_DAY}</code>"))
-    copy_lines = [f"🔎 Telegram ID: {data.get('tg_id')}", f"📱 Mobile: {data.get('mobile')}",
-                  f"🌍 Country Code: {data.get('country_code')}", f"🏴 Country: {data.get('country')}", ""]
+
+    # Copy text बनाओ
+    copy_lines = []
+    if profile:
+        if profile.get("display"):
+            copy_lines.append(f"👤 Display Name: {profile['display']}")
+        if profile.get("username"):
+            copy_lines.append(f"🔗 Username: @{profile['username']}")
+        if profile.get("bio"):
+            copy_lines.append(f"📝 Bio: {profile['bio']}")
+        if profile.get("profile_url"):
+            copy_lines.append(f"🌐 Profile: {profile['profile_url']}")
+        copy_lines.append("")
+
+    if data.get("mobile") and data.get("mobile") != "N/A":
+        copy_lines.append(f"📱 Mobile: {data.get('mobile')}")
+    if data.get("country_code") and data.get("country_code") != "N/A":
+        copy_lines.append(f"🌍 Country Code: {data.get('country_code')}")
+    if data.get("country") and data.get("country") != "N/A":
+        copy_lines.append(f"🏴 Country: {data.get('country')}")
+
     if SUPPORT_DISPLAY and SUPPORT_DISPLAY != "—":
+        copy_lines.append("")
         copy_lines.append(f"📢 Channel: {SUPPORT_DISPLAY}")
     if BOT_USERNAME:
         copy_lines.append(f"🤖 Bot: {BOT_USERNAME}")
     copy_text = "\n".join(copy_lines)
+
+    # Result display
+    result_lines = []
+    if profile:
+        result_lines.append("👤 <b>Telegram Profile</b>")
+        if profile.get("display"):
+            result_lines.append(f"👤 <b>Name:</b> {html.escape(profile['display'])}")
+        if profile.get("username"):
+            result_lines.append(f"🔗 <b>Username:</b> @{html.escape(profile['username'])}")
+        if profile.get("bio"):
+            bio_short = profile["bio"][:200] + ("..." if len(profile["bio"]) > 200 else "")
+            result_lines.append(f"📝 <b>Bio:</b> <i>{html.escape(bio_short)}</i>")
+        if profile.get("avatar_url"):
+            result_lines.append(f"🖼️ <a href=\"{html.escape(profile['avatar_url'])}\">Profile Picture</a>")
+        if profile.get("profile_url"):
+            result_lines.append(f"🌐 <a href=\"{html.escape(profile['profile_url'])}\">Open Profile</a>")
+        result_lines.append("")
+
+    result_lines.append("📱 <b>Phone Info</b>")
+    if data.get("mobile") and data.get("mobile") != "N/A":
+        result_lines.append(f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile')))}</code>")
+    if data.get("country_code") and data.get("country_code") != "N/A":
+        result_lines.append(f"🌍 <b>Country Code:</b> <code>{html.escape(str(data.get('country_code')))}</code>")
+    if data.get("country") and data.get("country") != "N/A":
+        result_lines.append(f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country')))}</code>")
+
     result_text = ("✅ <b>Result Found</b>\n\n<blockquote>"
-        f"🆔 <b>ID:</b> <code>{html.escape(str(data.get('tg_id')))}</code>\n"
-        f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile')))}</code>\n"
-        f"🌍 <b>Country Code:</b> <code>{html.escape(str(data.get('country_code')))}</code>\n"
-        f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country')))}</code>"
-        f"</blockquote>\n\n{rem_line}\n🔒 <i>Secure</i>" + bot_signature())
+                   + "\n".join(result_lines)
+                   + f"</blockquote>\n\n{rem_line}\n🔒 <i>Secure</i>" + bot_signature())
+
+    # अगर profile pic है तो photo के साथ भेजो
+    if profile and profile.get("avatar_url"):
+        try:
+            await msg.delete()
+            await update.message.reply_photo(
+                photo=profile["avatar_url"],
+                caption=result_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=result_kb(copy_text))
+            return
+        except Exception as e:
+            logger.warning(f"avatar send failed: {e}")
+
     await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
                         reply_markup=result_kb(copy_text))
 
@@ -1466,24 +1576,87 @@ async def handle_text(update, context):
             + bot_signature(), parse_mode=ParseMode.HTML, reply_markup=no_data_kb()); return
 
     data = result["data"]
+
+    # अगर username है तो profile scrape भी करो
+    profile = None
+    if not text.isdigit():
+        profile = await scrape_username(text)
+
     await record_search(user.id)
     new_rem = await get_remaining(user.id)
     rem_line = ("👑 <b>Unlimited</b>" if (OWNER_ID and user.id == OWNER_ID)
                 else ("💎 <b>Unlimited</b>" if await db.is_premium(user.id)
                       else f"📊 <b>Remaining:</b> <code>{new_rem}/{FREE_SEARCHES_PER_DAY}</code>"))
-    copy_lines = [f"🔎 Telegram ID: {data.get('tg_id')}", f"📱 Mobile: {data.get('mobile')}",
-                  f"🌍 Country Code: {data.get('country_code')}", f"🏴 Country: {data.get('country')}", ""]
+
+    # Copy text बनाओ
+    copy_lines = []
+    if profile:
+        if profile.get("display"):
+            copy_lines.append(f"👤 Display Name: {profile['display']}")
+        if profile.get("username"):
+            copy_lines.append(f"🔗 Username: @{profile['username']}")
+        if profile.get("bio"):
+            copy_lines.append(f"📝 Bio: {profile['bio']}")
+        if profile.get("profile_url"):
+            copy_lines.append(f"🌐 Profile: {profile['profile_url']}")
+        copy_lines.append("")
+
+    if data.get("mobile") and data.get("mobile") != "N/A":
+        copy_lines.append(f"📱 Mobile: {data.get('mobile')}")
+    if data.get("country_code") and data.get("country_code") != "N/A":
+        copy_lines.append(f"🌍 Country Code: {data.get('country_code')}")
+    if data.get("country") and data.get("country") != "N/A":
+        copy_lines.append(f"🏴 Country: {data.get('country')}")
+
     if SUPPORT_DISPLAY and SUPPORT_DISPLAY != "—":
+        copy_lines.append("")
         copy_lines.append(f"📢 Channel: {SUPPORT_DISPLAY}")
     if BOT_USERNAME:
         copy_lines.append(f"🤖 Bot: {BOT_USERNAME}")
     copy_text = "\n".join(copy_lines)
+
+    # Result display
+    result_lines = []
+    if profile:
+        result_lines.append("👤 <b>Telegram Profile</b>")
+        if profile.get("display"):
+            result_lines.append(f"👤 <b>Name:</b> {html.escape(profile['display'])}")
+        if profile.get("username"):
+            result_lines.append(f"🔗 <b>Username:</b> @{html.escape(profile['username'])}")
+        if profile.get("bio"):
+            bio_short = profile["bio"][:200] + ("..." if len(profile["bio"]) > 200 else "")
+            result_lines.append(f"📝 <b>Bio:</b> <i>{html.escape(bio_short)}</i>")
+        if profile.get("avatar_url"):
+            result_lines.append(f"🖼️ <a href=\"{html.escape(profile['avatar_url'])}\">Profile Picture</a>")
+        if profile.get("profile_url"):
+            result_lines.append(f"🌐 <a href=\"{html.escape(profile['profile_url'])}\">Open Profile</a>")
+        result_lines.append("")
+
+    result_lines.append("📱 <b>Phone Info</b>")
+    if data.get("mobile") and data.get("mobile") != "N/A":
+        result_lines.append(f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile')))}</code>")
+    if data.get("country_code") and data.get("country_code") != "N/A":
+        result_lines.append(f"🌍 <b>Country Code:</b> <code>{html.escape(str(data.get('country_code')))}</code>")
+    if data.get("country") and data.get("country") != "N/A":
+        result_lines.append(f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country')))}</code>")
+
     result_text = ("✅ <b>Result Found</b>\n\n<blockquote>"
-        f"🆔 <b>ID:</b> <code>{html.escape(str(data.get('tg_id')))}</code>\n"
-        f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile')))}</code>\n"
-        f"🌍 <b>Country Code:</b> <code>{html.escape(str(data.get('country_code')))}</code>\n"
-        f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country')))}</code>"
-        f"</blockquote>\n\n{rem_line}\n🔒 <i>Secure</i>" + bot_signature())
+                   + "\n".join(result_lines)
+                   + f"</blockquote>\n\n{rem_line}\n🔒 <i>Secure</i>" + bot_signature())
+
+    # अगर profile pic है तो photo के साथ भेजो
+    if profile and profile.get("avatar_url"):
+        try:
+            await msg.delete()
+            await update.message.reply_photo(
+                photo=profile["avatar_url"],
+                caption=result_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=result_kb(copy_text))
+            return
+        except Exception as e:
+            logger.warning(f"avatar send failed: {e}")
+
     await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
                         reply_markup=result_kb(copy_text))
 
