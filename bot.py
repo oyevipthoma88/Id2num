@@ -396,6 +396,7 @@ async def cancel_cmd(update, context):
     await update.message.reply_text("✅ Cancelled.", reply_markup=main_menu_kb(update.effective_user.id))
 
 async def post_init(app):
+    # MongoDB validate
     try:
         mongo = db._get_db()
         await mongo.command("ping")
@@ -405,8 +406,7 @@ async def post_init(app):
         logger.error(f"❌ MongoDB failed: {e}")
         raise
 
-async def post_shutdown(app):
-    await db.close_db()
+    # Support channel validate (startup पर)
     if SUPPORT_CHAT_ID:
         try:
             chat = await app.bot.get_chat(SUPPORT_CHAT_ID)
@@ -414,8 +414,13 @@ async def post_shutdown(app):
             m = await app.bot.get_chat_member(SUPPORT_CHAT_ID, me.id)
             if m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
                 logger.info(f"✅ Bot admin in support: {chat.title}")
-            else: logger.error("❌ Bot NOT admin in support channel!")
-        except Exception as e: logger.error(f"⚠️ Support check: {e}")
+            else:
+                logger.error("❌ Bot NOT admin in support channel — force join will fail!")
+        except Exception as e:
+            logger.error(f"⚠️ Support check: {e}")
+
+async def post_shutdown(app):
+    await db.close_db()
 
 # ===== PLAN SELECTION → QR =====
 async def show_plan_qr(q, user, plan_key):
