@@ -43,9 +43,12 @@ def now_str(): return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 async def send_log(context, text):
     if not LOG_CHANNEL_ID: return
     try:
-        await context.bot.send_message(LOG_CHANNEL_ID, text,
-            parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-    except Exception as e: logger.warning(f"log: {e}")
+        await context.bot.send_message(
+            LOG_CHANNEL_ID, text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True)
+    except Exception as e:
+        logger.warning(f"log: {e}")
 
 def user_info(update):
     u = update.effective_user
@@ -89,28 +92,33 @@ async def smart_edit(q, text, **kwargs):
 
 # ===== FORCE JOIN =====
 _member_cache = {}
-CACHE_TTL = 60
+CACHE_TTL = 300
 
 async def is_member(context, user_id):
     if not SUPPORT_CHAT_ID: return True
     if OWNER_ID and user_id == OWNER_ID: return True
-    now = time.time(); c = _member_cache.get(user_id)
+    now = time.time()
+    c = _member_cache.get(user_id)
     if c and (now - c[1]) < CACHE_TTL: return c[0]
-    for i in range(2):
-        try:
-            m = await context.bot.get_chat_member(SUPPORT_CHAT_ID, user_id)
-            ok = m.status in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR,
-                              ChatMemberStatus.OWNER, ChatMemberStatus.RESTRICTED)
-            _member_cache[user_id] = (ok, now); return ok
-        except BadRequest as e:
-            err = str(e).lower()
-            if "user not found" in err or "participant" in err:
-                _member_cache[user_id] = (False, now); return False
-            if "chat not found" in err or "chat admin" in err:
-                logger.error(f"⚠️ Support channel issue (bot admin?): {e}"); return True
-        except TelegramError as e: logger.warning(f"TG: {e}")
-        if i < 1: await asyncio.sleep(0.8)
-    return True
+    try:
+        m = await context.bot.get_chat_member(SUPPORT_CHAT_ID, user_id)
+        ok = m.status in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR,
+                          ChatMemberStatus.OWNER, ChatMemberStatus.RESTRICTED)
+        _member_cache[user_id] = (ok, now)
+        return ok
+    except BadRequest as e:
+        err = str(e).lower()
+        if "user not found" in err or "participant" in err:
+            _member_cache[user_id] = (False, now)
+            return False
+        if "chat not found" in err or "chat admin" in err:
+            logger.error(f"⚠️ Support channel issue (bot admin?): {e}")
+            return True
+        logger.warning(f"Member check: {e}")
+        return True
+    except TelegramError as e:
+        logger.warning(f"TG error: {e}")
+        return True
 
 def join_kb():
     b = []
@@ -139,7 +147,8 @@ async def require_join(update, context):
 # ===== REFERRAL =====
 def referral_link(user_id):
     if not BOT_USERNAME: return ""
-    return f"https://t.me/{BOT_USERNAME.lstrip('@')}?start=ref_{user_id}"
+    username = BOT_USERNAME.lstrip("@")
+    return f"https://t.me/{username}?start=ref_{user_id}"
 
 async def referral_progress(user_id):
     cnt = await db.get_referral_count(user_id)
@@ -341,16 +350,37 @@ async def show_premium_screen(q, user, is_edit=True):
 # ===== COMMANDS =====
 async def start(update, context):
     user = update.effective_user
-    await send_log(context, f"🟢 /start\n🕒 {now_str()}\n\n{user_info(update)}")
+    if not user:
+        return
+
+    # Referral parsing — multiple formats support
     args = context.args or []
     referrer = None
-    if args and args[0].startswith("ref_"):
-        try: referrer = int(args[0][4:])
-        except Exception: pass
+    if args:
+        arg = args[0].strip()
+        if arg.startswith("ref_"):
+            try:
+                referrer = int(arg[4:])
+            except Exception:
+                pass
+        elif arg.isdigit():
+            try:
+                referrer = int(arg)
+            except Exception:
+                pass
+
     is_new = await db.create_user_if_new(user.id, user.username, user.first_name)
+
+    # Referral process — only for NEW users
     if is_new and referrer and referrer != user.id:
-        if await db.set_referrer(user.id, referrer):
-            await send_log(context, f"🎁 REFERRAL {user.id} ← {referrer}")
+        success = await db.set_referrer(user.id, referrer)
+        if success:
+            # Log
+            await send_log(context,
+                f"🎁 <b>REFERRAL</b>\n🕒 {now_str()}\n\n"
+                f"👤 New: <code>{user.id}</code> ({html.escape(user.full_name)})\n"
+                f"🔗 Referrer: <code>{referrer}</code>")
+            # Notify referrer
             try:
                 ref_cnt = await db.get_referral_count(referrer)
                 if ref_cnt >= REFERRALS_REQUIRED:
@@ -359,10 +389,16 @@ async def start(update, context):
                            f"अब आप search कर सकते हो!</blockquote>")
                 else:
                     msg = (f"🎉 <b>New Referral!</b>\n\n<blockquote>"
-                           f"📊 Progress: <code>{ref_cnt}/{REFERRALS_REQUIRED}</code>\n"
+                           f"👤 <b>New User:</b> {html.escape(user.full_name)}\n"
+                           f"📊 <b>Progress:</b> <code>{ref_cnt}/{REFERRALS_REQUIRED}</code>\n"
                            f"और refer करने पर unlock होगा।</blockquote>")
-                await context.bot.send_message(referrer, msg, parse_mode=ParseMode.HTML)
-            except Exception: pass
+                await context.bot.send_message(referrer, msg,
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            except Exception as e:
+                logger.warning(f"referrer notify failed: {e}")
+
+    await send_log(context, f"🟢 /start\n🕒 {now_str()}\n\n{user_info(update)}")
+
     if not await require_join(update, context): return
     allowed, reason = await can_search(user.id)
     caption = ("👋 <b>Welcome to TG OSINT Bot</b>\n\n<blockquote>"
