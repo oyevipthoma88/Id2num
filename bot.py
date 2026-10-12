@@ -190,7 +190,6 @@ async def lookup_tg_id(tg_id):
     return {"ok": False, "error": last_err or "Unknown"}
 
 
-
 # ===== USERNAME PROFILE SCRAPER =====
 def _scrape_meta(html, prop, attr="property"):
     """Extract meta tag content (og: or twitter:)"""
@@ -1202,9 +1201,6 @@ async def handle_text(update, context):
     await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
                         reply_markup=result_kb(copy_text))
 
-if __name__ == "__main__":
-    main()
-
 # ===== PHOTO HANDLER (SS Upload) =====
 async def handle_photo(update, context):
     user = update.effective_user
@@ -1307,9 +1303,6 @@ async def error_handler(update, context):
 
 
 # ===== MAIN =====
-
-if __name__ == "__main__":
-    main()
 
 # ===== PHOTO HANDLER (SS Upload) =====
 async def handle_photo(update, context):
@@ -1436,11 +1429,6 @@ def main():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
-
-if __name__ == "__main__":
-    main()
-
-
 # ==================================================
 #        PARALLEL LOOKUP ENGINE (Multi-source)
 # ==================================================
@@ -1552,3 +1540,7 @@ async def parallel_lookup(query):
 
     logger.info(f"[parallel] sources={merged['sources']} ok={merged['ok']}")
     return merged
+
+
+if __name__ == "__main__":
+    main()
