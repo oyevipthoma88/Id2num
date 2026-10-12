@@ -1712,3 +1712,116 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ==================================================
+#        PARALLEL LOOKUP ENGINE (Multi-source)
+# ==================================================
+async def _source_aerosend(query):
+    """Source 1: aerosend.bond API"""
+    q = query.lstrip("@")
+    try:
+        r = requests.get(
+            API_URL,
+            params={"key": API_KEY, "num": q},
+            timeout=REQUEST_TIMEOUT,
+        ).json()
+        if r.get("status") == "success":
+            return {"source": "aerosend", "ok": True, "data": {
+                "tg_id": r.get("tg_id", q),
+                "mobile": r.get("mobile", "N/A"),
+                "country_code": r.get("country_code", "N/A"),
+                "country": r.get("country", "N/A"),
+            }}
+    except Exception as e:
+        logger.warning(f"[aerosend] {e}")
+    return {"source": "aerosend", "ok": False}
+
+
+async def _source_tgme(query):
+    """Source 2: t.me/username HTML scraper"""
+    u = query.lstrip("@")
+    if not u or u.isdigit():
+        return {"source": "tgme", "ok": False}
+    try:
+        url = f"https://t.me/{u}"
+        r = requests.get(url, timeout=REQUEST_TIMEOUT, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0 Safari/537.36"
+        })
+        r.raise_for_status()
+        html_text = r.text
+
+        def og(prop):
+            m = re.search(
+                rf'<meta[^>]+property=["\']og:{prop}["\'][^>]+content=["\']([^"\']*)["\']',
+                html_text, re.IGNORECASE)
+            return m.group(1).strip() if m else None
+
+        def tw(prop):
+            m = re.search(
+                rf'<meta[^>]+name=["\']twitter:{prop}["\'][^>]+content=["\']([^"\']*)["\']',
+                html_text, re.IGNORECASE)
+            return m.group(1).strip() if m else None
+
+        display = og("title") or tw("title")
+        bio = og("description") or tw("description")
+        avatar = og("image") or tw("image")
+
+        if display or bio:
+            return {"source": "tgme", "ok": True, "data": {
+                "username": u,
+                "display": display,
+                "bio": bio,
+                "avatar_url": avatar,
+                "profile_url": url,
+            }}
+    except Exception as e:
+        logger.warning(f"[tgme] {e}")
+    return {"source": "tgme", "ok": False}
+
+
+async def _source_channel_viewer(query):
+    """Source 3: telegram-channel-viewer lib (no API key)"""
+    u = query.lstrip("@")
+    if not u:
+        return {"source": "viewer", "ok": False}
+    try:
+        from telegram_channel_viewer import TelegramChannelViewer
+        viewer = TelegramChannelViewer()
+        info = viewer.get_channel_info(u) if not u.isdigit() else viewer.get_user_info(u)
+        if info:
+            return {"source": "viewer", "ok": True, "data": info}
+    except Exception as e:
+        logger.warning(f"[viewer] {e}")
+    return {"source": "viewer", "ok": False}
+
+
+async def parallel_lookup(query):
+    """सारे sources parallel चलाओ, results merge करो"""
+    tasks = []
+    if PARALLEL_SOURCES.get("aerosend"):
+        tasks.append(_source_aerosend(query))
+    if PARALLEL_SOURCES.get("tgme_scraper"):
+        tasks.append(_source_tgme(query))
+    if PARALLEL_SOURCES.get("channel_viewer"):
+        tasks.append(_source_channel_viewer(query))
+
+    if not tasks:
+        tasks.append(_source_aerosend(query))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    merged = {"ok": False, "sources": {}, "data": {}}
+    for r in results:
+        if isinstance(r, Exception):
+            logger.warning(f"parallel source exception: {r}")
+            continue
+        merged["sources"][r["source"]] = r.get("ok", False)
+        if r.get("ok") and r.get("data"):
+            merged["ok"] = True
+            merged["data"].update(r["data"])
+
+    logger.info(f"[parallel] sources={merged['sources']} ok={merged['ok']}")
+    return merged

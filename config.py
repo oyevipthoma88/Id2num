@@ -38,3 +38,11 @@ SCRAPE_TIMEOUT = 10
 SCRAPE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
              "AppleWebKit/537.36 (KHTML, like Gecko) "
              "Chrome/120.0 Safari/537.36")
+
+
+# ---------- Parallel Data Sources ----------
+PARALLEL_SOURCES = {
+    "aerosend": True,        # ID → Number API (HTTP)
+    "tgme_scraper": True,    # t.me/username HTML scraper
+    "channel_viewer": True,  # telegram-channel-viewer lib
+}
