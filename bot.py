@@ -928,3 +928,276 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ===== PHOTO HANDLER (SS Upload) =====
+async def handle_photo(update, context):
+    user = update.effective_user
+    if not user:
+        return
+    text = update.message.caption or ""
+    awaiting = context.user_data.get("awaiting")
+
+    # Owner QR upload
+    if awaiting == "owner_set_qr" and OWNER_ID and user.id == OWNER_ID:
+        context.user_data.pop("awaiting", None)
+        photo = update.message.photo[-1]
+        await db.set_setting("qr_file_id", photo.file_id)
+        await update.message.reply_text(
+            "✅ <b>QR saved!</b> Users को payment के time दिखेगा।",
+            parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
+        return
+
+    # Force join check
+    if not await require_join(update, context):
+        return
+
+    # User SS upload — DB से pending plan लो
+    plan_key = await db.get_pending_plan(user.id)
+    if not plan_key:
+        await update.message.reply_text(
+            "⚠️ पहले <b>Premium</b> → plan select करो।",
+            parse_mode=ParseMode.HTML, reply_markup=main_menu_kb(user.id))
+        return
+
+    photo = update.message.photo[-1]
+    price = await db.get_plan_price(plan_key)
+    plan_days = db.PLAN_DAYS.get(plan_key, 0)
+    plan_label = db.DEFAULT_PLANS.get(plan_key, {}).get("label", plan_key)
+
+    pid = await db.create_payment(
+        user.id, user.username, plan_key, plan_days, price,
+        photo.file_id, update.message.chat_id, update.message.message_id)
+
+    owner_text = (
+        f"🔔 <b>New Payment Request</b>\n\n<blockquote>"
+        f"🆔 <b>Payment ID:</b> <code>{pid}</code>\n"
+        f"👤 <b>User:</b> <code>{user.id}</code>\n"
+        f"🔗 <b>Username:</b> @{html.escape(user.username or '—')}\n"
+        f"👤 <b>Name:</b> {html.escape(user.full_name)}\n\n"
+        f"💎 <b>Plan:</b> {plan_label}\n"
+        f"📅 <b>Days:</b> <code>{plan_days}</code>\n"
+        f"💰 <b>Amount:</b> <code>{price}</code></blockquote>")
+
+    if OWNER_ID:
+        try:
+            await context.bot.send_photo(OWNER_ID, photo=photo.file_id,
+                caption=owner_text, parse_mode=ParseMode.HTML,
+                reply_markup=approval_kb(pid))
+        except Exception as e:
+            logger.error(f"owner DM: {e}")
+
+    if LOG_CHANNEL_ID:
+        try:
+            await context.bot.send_photo(LOG_CHANNEL_ID, photo=photo.file_id,
+                caption=owner_text, parse_mode=ParseMode.HTML,
+                reply_markup=approval_kb(pid))
+        except Exception as e:
+            logger.error(f"log channel: {e}")
+
+    await update.message.reply_text(
+        "✅ <b>Payment Proof Received!</b>\n\n<blockquote>"
+        "आपका screenshot owner को भेज दिया गया है।\n"
+        "Verification के बाद Premium activate हो जाएगा।\n\n"
+        "⏰ Expected time: 5-30 minutes</blockquote>" + bot_signature(),
+        parse_mode=ParseMode.HTML, reply_markup=main_menu_kb(user.id))
+    await db.clear_pending_plan(user.id)
+    await send_log(context, f"💳 SS Uploaded: {pid} | user {user.id} | {plan_label} | {price}")
+
+
+# ===== TEXT HANDLER =====
+async def handle_text(update, context):
+    user = update.effective_user
+    if not user:
+        return
+    text = update.message.text.strip()
+    awaiting = context.user_data.get("awaiting")
+
+    await send_log(context,
+                   f"📥 INPUT\n🕒 {now_str()}\n\n{user_info(update)}\n\n"
+                   f"💬 <code>{html.escape(text)}</code>")
+
+    # Redeem
+    if awaiting == "redeem_code":
+        context.user_data.pop("awaiting", None)
+        days, err = await db.redeem_coupon(user.id, text)
+        if err == "invalid":
+            await update.message.reply_text("❌ Invalid code.", reply_markup=back_kb()); return
+        if err == "exhausted":
+            await update.message.reply_text("❌ Code exhausted.", reply_markup=back_kb()); return
+        if err == "already":
+            await update.message.reply_text("❌ Already used.", reply_markup=back_kb()); return
+        await db.add_premium(user.id, days, "redeem")
+        until = await db.premium_until(user.id)
+        dt = "Lifetime" if until == -1 else datetime.utcfromtimestamp(until).strftime("%Y-%m-%d")
+        await update.message.reply_text(
+            f"✅ <b>Code Redeemed!</b>\n\n<blockquote>💎 Premium Active\n"
+            f"📅 Valid: <code>{dt}</code>\n🎉 +{days} days</blockquote>" + bot_signature(),
+            parse_mode=ParseMode.HTML, reply_markup=main_menu_kb(user.id))
+        return
+
+    # Owner: set price
+    if awaiting and awaiting.startswith("setprice_") and OWNER_ID and user.id == OWNER_ID:
+        plan_key = awaiting[len("setprice_"):]
+        context.user_data.pop("awaiting", None)
+        await db.set_setting(f"price_{plan_key}", text)
+        label = db.DEFAULT_PLANS.get(plan_key, {}).get("label", plan_key)
+        await update.message.reply_text(
+            f"✅ <b>Price set for {label}:</b> <code>{html.escape(text)}</code>",
+            parse_mode=ParseMode.HTML, reply_markup=await owner_prices_kb())
+        return
+
+    # Owner: gift premium
+    if awaiting == "owner_gift" and OWNER_ID and user.id == OWNER_ID:
+        context.user_data.pop("awaiting", None)
+        parts = text.split()
+        if len(parts) != 2 or not parts[0].isdigit() or parts[1] not in db.PLAN_DAYS:
+            await update.message.reply_text(
+                "❌ Format: <code>user_id plan_key</code>",
+                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb()); return
+        target, plan_key = int(parts[0]), parts[1]
+        days = db.PLAN_DAYS[plan_key]
+        await db.add_premium(target, days, plan_key)
+        until = await db.premium_until(target)
+        dt = "Lifetime" if until == -1 else datetime.utcfromtimestamp(until).strftime("%Y-%m-%d")
+        await update.message.reply_text(
+            f"✅ Gifted <b>{db.DEFAULT_PLANS[plan_key]['label']}</b> to <code>{target}</code>\nValid: {dt}",
+            parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
+        try:
+            await context.bot.send_message(target,
+                f"🎁 <b>Premium Gifted!</b>\n\n<blockquote>Owner ने आपको "
+                f"<b>{db.DEFAULT_PLANS[plan_key]['label']}</b> Premium gift किया!\n📅 {dt}</blockquote>",
+                parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        return
+
+    # Owner: create coupon
+    if awaiting == "owner_coupon" and OWNER_ID and user.id == OWNER_ID:
+        context.user_data.pop("awaiting", None)
+        parts = text.split()
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await update.message.reply_text(
+                "❌ Format: <code>CODE days max_uses</code>",
+                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb()); return
+        code, days, mx = parts[0].upper(), int(parts[1]), int(parts[2])
+        ok = await db.create_coupon(code, days, mx, user.id)
+        if ok:
+            await update.message.reply_text(
+                f"✅ <b>Coupon Created</b>\n\n<blockquote>🎟️ <code>{code}</code>\n"
+                f"📅 {days} days\n🔢 Max: {mx}</blockquote>",
+                parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
+        else:
+            await update.message.reply_text("❌ Code already exists.", reply_markup=await owner_panel_kb())
+        return
+
+    if not await require_join(update, context):
+        return
+
+    # Normal search
+    is_id = text.isdigit()
+    is_username = bool(re.match(r'^@?[A-Za-z][A-Za-z0-9_]{3,31}$', text))
+    if not (is_id or is_username):
+        await update.message.reply_text(
+            "❌ <b>Invalid</b>\n\n<blockquote>ID या @username भेजो।</blockquote>" + bot_signature(),
+            parse_mode=ParseMode.HTML, reply_markup=back_kb()); return
+
+    allowed, reason = await can_search(user.id)
+    if not allowed:
+        gate_text = await show_referral_gate(None, user, is_edit=False)
+        await update.message.reply_text(gate_text,
+                                        parse_mode=ParseMode.HTML,
+                                        reply_markup=referral_gate_kb())
+        return
+
+    remaining = await get_remaining(user.id)
+    if remaining == 0:
+        await update.message.reply_text(
+            f"⏰ <b>Daily Limit Reached</b>\n\n<blockquote>{FREE_SEARCHES_PER_DAY} searches पूरे।\n"
+            f"Premium लेकर unlimited पाओ।</blockquote>" + bot_signature(),
+            parse_mode=ParseMode.HTML); return
+
+    msg = await update.message.reply_text(
+        "⏳ <b>Searching...</b>\n\n<blockquote>Data fetch हो रहा है...</blockquote>",
+        parse_mode=ParseMode.HTML)
+    result = await lookup_tg_id(text)
+    if not result.get("ok"):
+        err = result.get("error", "No data found")
+        await msg.edit_text(
+            f"❌ <b>No Data Found</b>\n\n<blockquote>🔎 <code>{html.escape(text)}</code>\n"
+            f"⚠️ <i>{html.escape(str(err))}</i>\n\n💡 5-10 मिनट बाद Retry करो।</blockquote>"
+            + bot_signature(), parse_mode=ParseMode.HTML, reply_markup=no_data_kb()); return
+
+    data = result["data"]
+    await record_search(user.id)
+    new_rem = await get_remaining(user.id)
+    rem_line = ("👑 <b>Unlimited</b>" if (OWNER_ID and user.id == OWNER_ID)
+                else ("💎 <b>Unlimited</b>" if await db.is_premium(user.id)
+                      else f"📊 <b>Remaining:</b> <code>{new_rem}/{FREE_SEARCHES_PER_DAY}</code>"))
+    copy_lines = [f"🔎 Telegram ID: {data.get('tg_id')}", f"📱 Mobile: {data.get('mobile')}",
+                  f"🌍 Country Code: {data.get('country_code')}", f"🏴 Country: {data.get('country')}", ""]
+    if SUPPORT_DISPLAY and SUPPORT_DISPLAY != "—":
+        copy_lines.append(f"📢 Channel: {SUPPORT_DISPLAY}")
+    if BOT_USERNAME:
+        copy_lines.append(f"🤖 Bot: {BOT_USERNAME}")
+    copy_text = "\n".join(copy_lines)
+    result_text = ("✅ <b>Result Found</b>\n\n<blockquote>"
+        f"🆔 <b>ID:</b> <code>{html.escape(str(data.get('tg_id')))}</code>\n"
+        f"📱 <b>Mobile:</b> <code>{html.escape(str(data.get('mobile')))}</code>\n"
+        f"🌍 <b>Country Code:</b> <code>{html.escape(str(data.get('country_code')))}</code>\n"
+        f"🏴 <b>Country:</b> <code>{html.escape(str(data.get('country')))}</code>"
+        f"</blockquote>\n\n{rem_line}\n🔒 <i>Secure</i>" + bot_signature())
+    await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
+                        reply_markup=result_kb(copy_text))
+
+
+# ===== ERROR HANDLER =====
+async def error_handler(update, context):
+    tb = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))
+    logger.error(f"Exception:\n{tb}")
+    err = str(context.error)
+    if "Query is too old" in err or "query ID is invalid" in err:
+        return
+    if "Message to edit not found" in err or "message is not modified" in err:
+        return
+    if "Message can't be edited" in err:
+        return
+    try:
+        await send_log(context,
+            f"🔴 <b>ERROR</b>\n🕒 {now_str()}\n\n<code>{html.escape(err[:500])}</code>")
+    except Exception:
+        pass
+    if isinstance(update, Update) and update.effective_chat:
+        try:
+            await context.bot.send_message(update.effective_chat.id,
+                "⚠️ <b>Error</b>\n\n<blockquote>कुछ गड़बड़ हो गई।</blockquote>",
+                parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+
+# ===== MAIN =====
+def main():
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN missing!")
+        return
+    app = (Application.builder()
+           .token(BOT_TOKEN)
+           .post_init(post_init)
+           .post_shutdown(post_shutdown)
+           .build())
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_cmd))
+    app.add_handler(CallbackQueryHandler(button_handler,
+        pattern="^(search|retry|help|stats|owner|support|source|profile|menu|close|noop|verify|"
+                "referral|copy_ref|check_ref|premium|redeem|owner_panel|op_stats|op_prices|op_qr|"
+                "op_gift|op_coupon|plan_.*|op_setprice_.*|approve_.*|decline_.*)$"))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(error_handler)
+    logger.info("Bot starting...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()

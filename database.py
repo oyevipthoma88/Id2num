@@ -7,14 +7,6 @@ logger = logging.getLogger("DB")
 _client = None
 _db = None
 
-async def close_db():
-    global _client, _db
-    if _client:
-        _client.close()
-        _client = None
-        _db = None
-        logger.info("MongoDB closed")
-
 def _get_db():
     global _client, _db
     if _db is None:
