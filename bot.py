@@ -34,7 +34,7 @@ async def _test_api(query):
 async def safe_edit_msg(msg, text, **kwargs):
     """Edit message safely — agar delete ho gaya to naya bhej do"""
     try:
-        await msg.edit_text(text, **kwargs)
+        await safe_edit_msg(msg, text, **kwargs)
         return msg
     except Exception as e:
         err = str(e).lower()
@@ -1233,7 +1233,7 @@ async def handle_text(update, context):
         except Exception as e:
             logger.warning(f"avatar: {e}")
 
-    await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
+    await safe_edit_msg(msg, result_text, parse_mode=ParseMode.HTML,
                         reply_markup=result_kb(copy_text))
 
 # ===== PHOTO HANDLER (SS Upload) =====
