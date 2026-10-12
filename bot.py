@@ -17,6 +17,22 @@ logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=lo
 for lib in ("httpx", "telegram", "motor", "pymongo", "DB"): logging.getLogger(lib).setLevel(logging.WARNING)
 logger = logging.getLogger("TG_OSINT")
 
+# ===== AUTO-DELETE HELPERS (guaranteed at top) =====
+async def auto_delete_message(msg, delay=15):
+    try:
+        await asyncio.sleep(delay)
+        await msg.delete()
+    except Exception as e:
+        logger.debug(f"auto_delete: {e}")
+
+
+def schedule_delete(context, msg, delay=15):
+    try:
+        context.application.create_task(auto_delete_message(msg, delay))
+    except Exception as e:
+        logger.warning(f"schedule_delete: {e}")
+
+
 def btn(text, **kw):
     try: return InlineKeyboardButton(text, **kw)
     except (TypeError, ValueError):
@@ -50,14 +66,6 @@ async def send_log(context, text):
             disable_web_page_preview=True)
     except Exception as e:
         logger.warning(f"log: {e}")
-
-async def auto_delete_message(msg, delay=15):
-    """Message को delay सेकंड बाद auto-delete करो"""
-    try:
-        await asyncio.sleep(delay)
-        await msg.delete()
-    except Exception as e:
-        logger.debug(f"auto_delete skipped: {e}")
 
 
 def user_info(update):
@@ -1475,22 +1483,7 @@ def main():
 
 
 # ===== AUTO DELETE HELPERS =====
-async def auto_delete_message(msg, delay=15):
-    try:
-        await asyncio.sleep(delay)
-        await msg.delete()
-    except Exception as e:
-        logger.debug(f"auto_delete: {e}")
 
-
-def schedule_delete(context, msg, delay=15):
-    try:
-        context.application.create_task(auto_delete_message(msg, delay))
-    except Exception as e:
-        logger.warning(f"schedule_delete: {e}")
-
-
-# ===== TEXT HANDLER =====
 
 if __name__ == "__main__":
     main()
