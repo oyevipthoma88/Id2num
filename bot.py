@@ -563,16 +563,35 @@ async def button_handler(update, context):
         lim = "♾️ Unlimited" if rem == -1 else f"{rem}/{FREE_SEARCHES_PER_DAY}"
         cnt, req = await referral_progress(user.id)
         prem = await db.is_premium(user.id)
-        st = await db.get_stats()
-        text = ("📊 <b>Bot Statistics</b>\n\n<blockquote>"
-                "🤖 <b>Status:</b> Online\n"
-                f"📡 <b>Your Remaining:</b> <code>{lim}</code>\n"
-                f"🎁 <b>Referrals:</b> <code>{cnt}/{req}</code>\n"
-                f"💎 <b>Premium:</b> {'✅' if prem else '❌'}\n"
-                f"👑 <b>Owner:</b> {'Yes' if is_owner else 'No'}\n"
-                f"👥 <b>Total Users:</b> <code>{st['total']}</code>\n"
-                f"💎 <b>Premium Users:</b> <code>{st['premium']}</code>\n"
-                "🛡️ <b>Version:</b> 14.0</blockquote>" + bot_signature())
+
+        # Common lines — user's own data
+        lines = [
+            f"📡 <b>Remaining Searches:</b> <code>{lim}</code>",
+            f"🎁 <b>Your Referrals:</b> <code>{cnt}/{req}</code>",
+            f"💎 <b>Premium:</b> {'✅ Active' if prem else '❌ Inactive'}",
+        ]
+
+        # Premium expiry info
+        if prem:
+            until = await db.premium_until(user.id)
+            if until == -1:
+                lines.append("📅 <b>Valid Till:</b> <code>Lifetime</code>")
+            elif until:
+                dt = datetime.utcfromtimestamp(until).strftime("%Y-%m-%d")
+                lines.append(f"📅 <b>Valid Till:</b> <code>{dt}</code>")
+
+        # Owner को extra data
+        if is_owner:
+            st = await db.get_stats()
+            lines.append("")
+            lines.append("👑 <b>Owner View:</b>")
+            lines.append(f"👥 <b>Total Users:</b> <code>{st['total']}</code>")
+            lines.append(f"💎 <b>Premium Users:</b> <code>{st['premium']}</code>")
+            lines.append(f"⏳ <b>Pending Payments:</b> <code>{st['pending']}</code>")
+
+        text = ("📊 <b>Your Statistics</b>\n\n<blockquote>"
+                + "\n".join(lines)
+                + "</blockquote>" + bot_signature())
         await smart_edit(q, text, parse_mode=ParseMode.HTML, reply_markup=back_kb())
 
     elif data == "owner":
