@@ -181,8 +181,13 @@ async def record_search(user_id):
     await db.inc_daily_used(user_id)
 
 async def reset_str(user_id):
-    # simplified — reset 24hrs from last_reset
-    return "24h"
+    u = await db._get_db().users.find_one({"user_id": user_id})
+    if not u or not u.get("last_reset"):
+        return "24h"
+    delta = (u["last_reset"] + 86400) - int(time.time())
+    if delta <= 0:
+        return "now"
+    return f"{delta // 3600}h {(delta % 3600) // 60}m"
 
 # ===== KEYBOARDS =====
 def main_menu_kb(user_id=None):
