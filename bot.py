@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-import logging, asyncio, html, re, time, requests, io
+import logging, asyncio, html, re, time, requests, traceback
 from datetime import datetime
-from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, Update,
-                      CopyTextButton, InputFile, BufferedInputFile)
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, Update, CopyTextButton)
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
@@ -19,7 +18,9 @@ logger = logging.getLogger("TG_OSINT")
 
 def btn(text, **kw):
     try: return InlineKeyboardButton(text, **kw)
-    except TypeError: kw.pop("style", None); return InlineKeyboardButton(text, **kw)
+    except (TypeError, ValueError):
+        kw.pop("style", None)
+        return InlineKeyboardButton(text, **kw)
 
 def _norm_link(raw):
     if not raw: return None, "", "—"
@@ -27,7 +28,10 @@ def _norm_link(raw):
     if raw.startswith("http"):
         return raw, raw, "@" + raw.rstrip("/").split("/")[-1]
     if raw.startswith("-"):
-        return int(raw), f"https://t.me/{raw}", raw
+        # Private channel — numeric ID
+        chat_id = int(raw)
+        short = str(abs(chat_id))[3:] if len(str(abs(chat_id))) > 3 else str(abs(chat_id))
+        return chat_id, f"https://t.me/c/{short}", "Private Channel"
     if raw.startswith("@"):
         return raw, f"https://t.me/{raw.lstrip('@')}", raw
     return f"@{raw}", f"https://t.me/{raw}", f"@{raw}"
@@ -62,6 +66,12 @@ async def smart_edit(q, text, **kwargs):
     msg = q.message
     has_photo = bool(getattr(msg, "photo", None))
     if has_photo:
+        if len(text) <= 1024:
+            try:
+                await q.edit_message_caption(caption=text, **kwargs); return
+            except BadRequest as e:
+                if "not modified" in str(e).lower(): return
+            except Exception: pass
         try: await msg.delete()
         except Exception: pass
         try: await msg.chat.send_message(text, **kwargs); return
@@ -463,8 +473,8 @@ async def button_handler(update, context):
 
     elif data.startswith("plan_"):
         plan_key = data[5:]
+        await db.set_pending_plan(user.id, plan_key)  # ✅ DB में save
         await show_plan_qr(q, user, plan_key)
-        context.user_data["selected_plan"] = plan_key
 
     elif data == "redeem":
         context.user_data["awaiting"] = "redeem_code"
@@ -672,8 +682,8 @@ async def handle_photo(update, context):
                                         parse_mode=ParseMode.HTML, reply_markup=await owner_panel_kb())
         return
 
-    # User SS upload
-    plan_key = context.user_data.get("selected_plan")
+    # User SS upload — DB से pending plan लो (restart-safe)
+    plan_key = await db.get_pending_plan(user.id)
     if not plan_key:
         await update.message.reply_text(
             "⚠️ पहले <b>Premium</b> → plan select करो।", parse_mode=ParseMode.HTML,
@@ -718,7 +728,7 @@ async def handle_photo(update, context):
         "Verification के बाद Premium activate हो जाएगा।\n\n"
         "⏰ Expected time: 5-30 minutes</blockquote>" + bot_signature(),
         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb(user.id))
-    context.user_data.pop("selected_plan", None)
+    await db.clear_pending_plan(user.id)
     await send_log(context, f"💳 SS Uploaded: {pid} | user {user.id} | {plan_label} | {price}")
 
 
@@ -847,13 +857,22 @@ async def handle_text(update, context):
 
 
 async def error_handler(update, context):
-    logger.error("Exception:", exc_info=context.error)
+    tb = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))
+    logger.error(f"Exception:\n{tb}")
     err = str(context.error)
     if "Query is too old" in err or "query ID is invalid" in err: return
+    if "Message to edit not found" in err or "message is not modified" in err: return
+    if "Message can't be edited" in err: return
+    # Log channel
+    try:
+        await send_log(context,
+            f"🔴 <b>ERROR</b>\n🕒 {now_str()}\n\n<code>{html.escape(err[:500])}</code>")
+    except Exception: pass
     if isinstance(update, Update) and update.effective_chat:
         try:
             await context.bot.send_message(update.effective_chat.id,
-                "⚠️ <b>Error</b>\n\n<blockquote>कुछ गड़बड़ हो गई।</blockquote>", parse_mode=ParseMode.HTML)
+                "⚠️ <b>Error</b>\n\n<blockquote>कुछ गड़बड़ हो गई।</blockquote>",
+                parse_mode=ParseMode.HTML)
         except Exception: pass
 
 
