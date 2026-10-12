@@ -17,6 +17,39 @@ logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=lo
 for lib in ("httpx", "telegram", "motor", "pymongo", "DB"): logging.getLogger(lib).setLevel(logging.WARNING)
 logger = logging.getLogger("TG_OSINT")
 
+
+# ===== API TEST (debugging) =====
+async def _test_api(query):
+    try:
+        r = requests.get(API_URL, params={"key": API_KEY, "num": query},
+                        timeout=REQUEST_TIMEOUT).json()
+        logger.info(f"[TEST API] query={query} response={r}")
+        return r
+    except Exception as e:
+        logger.error(f"[TEST API] {e}")
+        return None
+
+
+
+async def safe_edit_msg(msg, text, **kwargs):
+    """Edit message safely — agar delete ho gaya to naya bhej do"""
+    try:
+        await msg.edit_text(text, **kwargs)
+        return msg
+    except Exception as e:
+        err = str(e).lower()
+        if "message to edit not found" in err or "message is not modified" in err:
+            # Naya message bhejo same chat mein
+            try:
+                new_msg = await msg.chat.send_message(text, **kwargs)
+                return new_msg
+            except Exception as e2:
+                logger.warning(f"safe_edit_msg fallback failed: {e2}")
+                return msg
+        logger.warning(f"safe_edit_msg: {e}")
+        return msg
+
+
 # ===== AUTO-DELETE HELPERS (guaranteed at top) =====
 async def auto_delete_message(msg, delay=15):
     try:
@@ -950,7 +983,7 @@ async def handle_text(update, context):
                 f"🔒 <b>@{html.escape(user.username or user.first_name)}</b>, "
                 f"search locked — bot ko private mein open karo.",
                 parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            schedule_delete(context, warn, 15)
+            schedule_delete(context, warn, 30)
             return
 
         remaining = await get_remaining(user.id)
@@ -959,7 +992,7 @@ async def handle_text(update, context):
                 f"⏰ <b>@{html.escape(user.username or user.first_name)}</b>, "
                 f"daily limit puri. Premium lo.",
                 parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            schedule_delete(context, warn, 15)
+            schedule_delete(context, warn, 30)
             return
 
         msg = await update.message.reply_text(
@@ -999,19 +1032,20 @@ async def handle_text(update, context):
             lines.append(f"🌍 <b>Country:</b> <code>{html.escape(str(data['country_code']))}</code>")
 
         if not lines:
-            await msg.edit_text(
+            new_msg = await safe_edit_msg(
+                msg,
                 f"❌ <b>No data found</b> for <code>{html.escape(query)}</code>",
                 parse_mode=ParseMode.HTML)
-            schedule_delete(context, msg, 15)
+            schedule_delete(context, new_msg, 30)
             return
 
         result_text = (
             f"✅ <b>Result for</b> <code>{html.escape(query)}</code>\n\n"
             "<blockquote>" + "\n".join(lines) + "</blockquote>"
             + bot_signature())
-        await msg.edit_text(result_text, parse_mode=ParseMode.HTML,
-                           disable_web_page_preview=True)
-        schedule_delete(context, msg, 15)
+        new_msg = await safe_edit_msg(msg, result_text, parse_mode=ParseMode.HTML,
+                                      disable_web_page_preview=True)
+        schedule_delete(context, new_msg, 30)
 
         await send_log(context,
             f"🔍 <b>GROUP SCAN</b>\n🕒 {now_str()}\n\n"
@@ -1140,7 +1174,8 @@ async def handle_text(update, context):
 
     if not data and not profile:
         err = result.get("error", "No data found") if isinstance(result, dict) else "No data"
-        await msg.edit_text(
+        await safe_edit_msg(
+            msg,
             f"❌ <b>No Data Found</b>\n\n<blockquote>🔎 <code>{html.escape(text)}</code>\n"
             f"⚠️ <i>{html.escape(str(err))}</i>\n\n💡 5-10 मिनट बाद Retry करो।</blockquote>"
             + bot_signature(), parse_mode=ParseMode.HTML, reply_markup=no_data_kb()); return
