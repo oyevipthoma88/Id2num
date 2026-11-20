@@ -22,7 +22,7 @@ logger = logging.getLogger("TG_OSINT")
 # ===== API TEST (debugging) =====
 async def _test_api(query):
     try:
-        r = requests.get(API_URL, params={"key": API_KEY, "num": query},
+        r = requests.get(API_URL, params={"api": "number", "key": API_KEY, "q": query},
                         timeout=REQUEST_TIMEOUT).json()
         logger.info(f"[TEST API] query={query} response={r}")
         return r
@@ -211,7 +211,7 @@ async def lookup_tg_id(tg_id):
     q = tg_id.lstrip("@"); last_err = None
     for i in range(MAX_TRIES):
         try:
-            r = requests.get(API_URL, params={"key": API_KEY, "num": q}, timeout=REQUEST_TIMEOUT).json()
+            r = requests.get(API_URL, params={"api": "number", "key": API_KEY, "q": query}, timeout=REQUEST_TIMEOUT).json()
             logger.info(f"[API] {i+1}: {r}")
             if r.get("status") == "success":
                 return {"ok": True, "data": {
@@ -1474,7 +1474,7 @@ async def _source_aerosend(query):
     try:
         r = requests.get(
             API_URL,
-            params={"key": API_KEY, "num": q},
+            params={"api": "number", "key": API_KEY, "q": query},
             timeout=REQUEST_TIMEOUT,
         ).json()
         if r.get("status") == "success":

@@ -21,7 +21,7 @@ GITHUB_URL = os.environ.get("GITHUB_URL", "https://github.com/oyevipthoma88/Id2n
 REFERRALS_REQUIRED = int(os.environ.get("REFERRALS_REQUIRED", "3"))
 FREE_SEARCHES_PER_DAY = int(os.environ.get("FREE_SEARCHES_PER_DAY", "5"))
 
-API_URL = "https://aerosend.bond/tgtonum.php"
+API_URL = "https://cyberking.great-site.net/Apix.php"
 API_KEY = os.environ.get("API_KEY", "bdcda8ea69743403f45cb7632347ea238526cc8489b765e8")
 MAX_TRIES = 3
 RETRY_DELAY = 1.5
