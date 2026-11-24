@@ -1504,7 +1504,7 @@ async def _source_aerosend(query):
     try:
         r = requests.get(
             API_URL,
-            params={"api": "number", "key": API_KEY, "q": query},
+            params=({"key": API_KEY, "userid": q} if q.isdigit() else {"key": API_KEY, "username": q.lstrip("@")}),
             timeout=REQUEST_TIMEOUT,
         ).json()
         if r.get("status") == "success":

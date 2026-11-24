@@ -81,12 +81,12 @@
       "required": false
     },
     "TG_API_ID": {
-      "description": "Telegram API ID (my.telegram.org) — optional",
+      "description": "Telegram API ID (optional)",
       "value": "",
       "required": false
     },
     "TG_API_HASH": {
-      "description": "Telegram API HASH (my.telegram.org) — optional",
+      "description": "Telegram API HASH (optional)",
       "value": "",
       "required": false
     }
