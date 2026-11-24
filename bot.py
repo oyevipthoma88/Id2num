@@ -209,21 +209,44 @@ async def referral_progress(user_id):
 
 # ===== API LOOKUP =====
 async def lookup_tg_id(tg_id):
-    q = tg_id.lstrip("@"); last_err = None
+    q = tg_id.lstrip("@").strip()
+    last_err = None
+    is_userid = q.isdigit()
+    param_key = "userid" if is_userid else "username"
+    value = q
     for i in range(MAX_TRIES):
         try:
-            r = requests.get(API_URL, params={"api": "number", "key": API_KEY, "q": query}, timeout=REQUEST_TIMEOUT).json()
+            r = requests.get(
+                API_URL,
+                params={"key": API_KEY, param_key: value},
+                timeout=REQUEST_TIMEOUT,
+            ).json()
             logger.info(f"[API] {i+1}: {r}")
-            if r.get("status") == "success":
-                return {"ok": True, "data": {
-                    "tg_id": r.get("tg_id", q), "mobile": r.get("mobile", "N/A"),
-                    "country_code": r.get("country_code", "N/A"), "country": r.get("country", "N/A")}}
-            last_err = r.get("error", "No data found")
+            if r.get("status") is True:
+                phones = r.get("phone") or []
+                if phones:
+                    p0 = phones[0]
+                    mobile = p0.get("number", "N/A")
+                    cc = p0.get("country_code", "N/A")
+                    country = p0.get("country", "N/A")
+                else:
+                    mobile = cc = country = "N/A"
+                return {
+                    "ok": True,
+                    "data": {
+                        "tg_id": r.get("tg_id", q),
+                        "mobile": mobile,
+                        "country_code": cc,
+                        "country": country,
+                    },
+                }
+            last_err = r.get("error") or r.get("message") or "No data found"
         except Exception as e:
-            last_err = str(e); logger.warning(f"[API] {i+1}: {e}")
-        if i < MAX_TRIES - 1: await asyncio.sleep(RETRY_DELAY)
+            last_err = str(e)
+            logger.warning(f"[API] {i+1}: {e}")
+        if i < MAX_TRIES - 1:
+            await asyncio.sleep(RETRY_DELAY)
     return {"ok": False, "error": last_err or "Unknown"}
-
 
 # ===== USERNAME PROFILE SCRAPER =====
 def _scrape_meta(html, prop, attr="property"):
