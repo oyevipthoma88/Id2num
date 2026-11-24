@@ -1,3 +1,4 @@
+from telegram.request import HTTPXRequest
 #!/usr/bin/env python3
 import logging, asyncio, html, re, time, requests, traceback
 from datetime import datetime
@@ -1447,7 +1448,7 @@ async def error_handler(update, context):
 def main():
     if not BOT_TOKEN: logger.error("BOT_TOKEN missing!"); return
     app = (Application.builder()
-           .token(BOT_TOKEN)
+           .token(BOT_TOKEN).get_updates_request(HTTPXRequest(read_timeout=30, connect_timeout=30))
            .post_init(post_init)
            .post_shutdown(post_shutdown)
            .build())
