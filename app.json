@@ -1,82 +1,53 @@
-
 {
-  "name": "Id2num Bot",
-  "description": "Telegram ID to Number lookup bot",
+  "name": "Id2num",
+  "description": "Telegram ID to Number OSINT Bot",
   "repository": "https://github.com/oyevipthoma88/Id2num",
-  "logo": "https://www.herokucdn.com/deploy/button.svg",
-  "keywords": ["telegram", "bot", "osint"],
+  "logo": "https://telegra.ph/file/24fa902ead26340f3df2c.png",
+  "keywords": ["telegram", "osint", "bot", "id2num"],
   "env": {
     "BOT_TOKEN": {
-      "description": "Your Telegram Bot Token from @BotFather",
+      "description": "Telegram Bot Token from @BotFather",
+      "value": "",
+      "required": true
+    },
+    "API_ID": {
+      "description": "Telegram API ID from https://my.telegram.org",
+      "value": "",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API HASH from https://my.telegram.org",
+      "value": "",
       "required": true
     },
     "MONGODB_URI": {
-      "description": "MongoDB Connection URI",
+      "description": "MongoDB connection string (from https://mongodb.com/atlas)",
+      "value": "",
       "required": true
     },
-    "MONGODB_DB": {
-      "description": "MongoDB Database Name",
-      "value": "tg_osint_bot"
-    },
-    "LOG_CHANNEL_ID": {
-      "description": "Log Channel ID",
-      "value": ""
-    },
-    "OWNER_ID": {
-      "description": "Owner Telegram User ID",
-      "value": "0"
-    },
-    "OWNER_USERNAME": {
-      "value": "@PokiePy"
-    },
-    "OWNER_CONTACT": {
-      "value": "@PokiePy"
-    },
-    "SUPPORT_LINK": {
-      "value": "@PokiePy"
-    },
-    "BOT_USERNAME": {
-      "description": "Bot Username without @",
-      "value": ""
-    },
-    "START_IMAGE_URL": {
-      "value": "https://i.ibb.co/3YvGkx7/telegram-osint.jpg"
-    },
-    "GITHUB_URL": {
-      "value": "https://github.com/oyevipthoma88/Id2num"
-    },
-    "REFERRALS_REQUIRED": {
-      "value": "3"
-    },
-    "FREE_SEARCHES_PER_DAY": {
-      "value": "5"
+    "API_URL": {
+      "description": "External OSINT API URL",
+      "value": "https://tele-to-num-by-dimpiii.vercel.app/api/tele",
+      "required": false
     },
     "API_KEY": {
-      "description": "API Key",
-      "value": "bdcda8ea69743403f45cb7632347ea238526cc8489b765e8"
+      "description": "API Key for the OSINT API",
+      "value": "dimpiii-modz",
+      "required": false
     },
-    "TG_API_ID": {
-      "description": "Telegram API ID",
-      "value": "0"
-    },
-    "TG_API_HASH": {
-      "description": "Telegram API Hash",
-      "value": ""
-    },
-    "TG_SESSION": {
-      "description": "Telethon String Session",
-      "value": ""
+    "OWNER_ID": {
+      "description": "Owner Telegram User ID (numeric)",
+      "value": "",
+      "required": false
     }
   },
+  "buildpacks": [
+    { "url": "heroku/python" }
+  ],
   "formation": {
     "worker": {
       "quantity": 1,
       "size": "basic"
     }
-  },
-  "buildpacks": [
-    {
-      "url": "heroku/python"
-    }
-  ]
+  }
 }

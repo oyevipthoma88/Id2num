@@ -1,0 +1,82 @@
+
+{
+  "name": "Id2num Bot",
+  "description": "Telegram ID to Number lookup bot",
+  "repository": "https://github.com/oyevipthoma88/Id2num",
+  "logo": "https://www.herokucdn.com/deploy/button.svg",
+  "keywords": ["telegram", "bot", "osint"],
+  "env": {
+    "BOT_TOKEN": {
+      "description": "Your Telegram Bot Token from @BotFather",
+      "required": true
+    },
+    "MONGODB_URI": {
+      "description": "MongoDB Connection URI",
+      "required": true
+    },
+    "MONGODB_DB": {
+      "description": "MongoDB Database Name",
+      "value": "tg_osint_bot"
+    },
+    "LOG_CHANNEL_ID": {
+      "description": "Log Channel ID",
+      "value": ""
+    },
+    "OWNER_ID": {
+      "description": "Owner Telegram User ID",
+      "value": "0"
+    },
+    "OWNER_USERNAME": {
+      "value": "@PokiePy"
+    },
+    "OWNER_CONTACT": {
+      "value": "@PokiePy"
+    },
+    "SUPPORT_LINK": {
+      "value": "@PokiePy"
+    },
+    "BOT_USERNAME": {
+      "description": "Bot Username without @",
+      "value": ""
+    },
+    "START_IMAGE_URL": {
+      "value": "https://i.ibb.co/3YvGkx7/telegram-osint.jpg"
+    },
+    "GITHUB_URL": {
+      "value": "https://github.com/oyevipthoma88/Id2num"
+    },
+    "REFERRALS_REQUIRED": {
+      "value": "3"
+    },
+    "FREE_SEARCHES_PER_DAY": {
+      "value": "5"
+    },
+    "API_KEY": {
+      "description": "API Key",
+      "value": "bdcda8ea69743403f45cb7632347ea238526cc8489b765e8"
+    },
+    "TG_API_ID": {
+      "description": "Telegram API ID",
+      "value": "0"
+    },
+    "TG_API_HASH": {
+      "description": "Telegram API Hash",
+      "value": ""
+    },
+    "TG_SESSION": {
+      "description": "Telethon String Session",
+      "value": ""
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
