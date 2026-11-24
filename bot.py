@@ -211,35 +211,22 @@ async def referral_progress(user_id):
 async def lookup_tg_id(tg_id):
     q = tg_id.lstrip("@").strip()
     last_err = None
-    is_userid = q.isdigit()
-    param_key = "userid" if is_userid else "username"
-    value = q
+    param_key = "userid" if q.isdigit() else "username"
     for i in range(MAX_TRIES):
         try:
-            r = requests.get(
-                API_URL,
-                params={"key": API_KEY, param_key: value},
-                timeout=REQUEST_TIMEOUT,
-            ).json()
+            r = requests.get(API_URL,
+                params={"key": API_KEY, param_key: q},
+                timeout=REQUEST_TIMEOUT).json()
             logger.info(f"[API] {i+1}: {r}")
             if r.get("status") is True:
                 phones = r.get("phone") or []
-                if phones:
-                    p0 = phones[0]
-                    mobile = p0.get("number", "N/A")
-                    cc = p0.get("country_code", "N/A")
-                    country = p0.get("country", "N/A")
-                else:
-                    mobile = cc = country = "N/A"
-                return {
-                    "ok": True,
-                    "data": {
-                        "tg_id": r.get("tg_id", q),
-                        "mobile": mobile,
-                        "country_code": cc,
-                        "country": country,
-                    },
-                }
+                p0 = phones[0] if phones else {}
+                return {"ok": True, "data": {
+                    "tg_id": r.get("tg_id", q),
+                    "mobile": p0.get("number", "N/A"),
+                    "country_code": p0.get("country_code", "N/A"),
+                    "country": p0.get("country", "N/A"),
+                }}
             last_err = r.get("error") or r.get("message") or "No data found"
         except Exception as e:
             last_err = str(e)

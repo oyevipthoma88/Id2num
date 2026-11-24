@@ -1,0 +1,105 @@
+{
+  "name": "Id2num",
+  "description": "Telegram ID to Number OSINT Bot",
+  "repository": "https://github.com/oyevipthoma88/Id2num",
+  "logo": "https://telegra.ph/file/24fa902ead26340f3df2c.png",
+  "keywords": [
+    "telegram",
+    "osint",
+    "bot",
+    "id2num"
+  ],
+  "env": {
+    "BOT_TOKEN": {
+      "description": "Telegram Bot Token from @BotFather",
+      "value": "",
+      "required": true
+    },
+    "MONGODB_URI": {
+      "description": "MongoDB connection string (from mongodb.com/atlas)",
+      "value": "",
+      "required": true
+    },
+    "MONGODB_DB": {
+      "description": "MongoDB Database Name",
+      "value": "tg_osint_bot",
+      "required": false
+    },
+    "API_URL": {
+      "description": "Working OSINT API URL",
+      "value": "https://tele-to-num-by-dimpiii.vercel.app/api/tele",
+      "required": false
+    },
+    "API_KEY": {
+      "description": "API Key for OSINT API",
+      "value": "dimpiii-modz",
+      "required": false
+    },
+    "OWNER_ID": {
+      "description": "Owner Telegram User ID (numeric)",
+      "value": "",
+      "required": false
+    },
+    "OWNER_USERNAME": {
+      "description": "Owner Telegram Username (without @)",
+      "value": "",
+      "required": false
+    },
+    "OWNER_CONTACT": {
+      "description": "Owner Contact Username (without @)",
+      "value": "",
+      "required": false
+    },
+    "SUPPORT_LINK": {
+      "description": "Support Channel Link (e.g. @yourchannel)",
+      "value": "",
+      "required": false
+    },
+    "BOT_USERNAME": {
+      "description": "Bot Username (without @)",
+      "value": "",
+      "required": false
+    },
+    "START_IMAGE_URL": {
+      "description": "Start Image URL",
+      "value": "https://i.ibb.co/3YvGkx7/telegram-osint.jpg",
+      "required": false
+    },
+    "GITHUB_URL": {
+      "description": "GitHub Repo URL",
+      "value": "https://github.com/oyevipthoma88/Id2num",
+      "required": false
+    },
+    "REFERRALS_REQUIRED": {
+      "description": "Referrals required to unlock search",
+      "value": "3",
+      "required": false
+    },
+    "FREE_SEARCHES_PER_DAY": {
+      "description": "Free searches per day",
+      "value": "5",
+      "required": false
+    },
+    "TG_API_ID": {
+      "description": "Telegram API ID (optional)",
+      "value": "",
+      "required": false
+    },
+    "TG_API_HASH": {
+      "description": "Telegram API HASH (optional)",
+      "value": "",
+      "required": false
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  }
+}
