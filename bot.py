@@ -23,7 +23,7 @@ logger = logging.getLogger("TG_OSINT")
 # ===== API TEST (debugging) =====
 async def _test_api(query):
     try:
-        r = requests.get(API_URL, params={"api": "number", "key": API_KEY, "q": query},
+        r = requests.get(API_URL, params=({"key": API_KEY, "userid": query} if str(query).isdigit() else {"key": API_KEY, "username": str(query).lstrip("@")}),
                         timeout=REQUEST_TIMEOUT).json()
         logger.info(f"[TEST API] query={query} response={r}")
         return r
@@ -522,11 +522,17 @@ async def start(update, context):
 
     if not await require_join(update, context): return
     allowed, reason = await can_search(user.id)
-    caption = ("👋 <b>Welcome to TG OSINT Bot</b>\n\n<blockquote>"
-               "🔎 ID / @username भेजो, details निकालो।</blockquote>\n\n"
-               "🛠️ <b>Features:</b>\n<blockquote>"
-               "• ID → Mobile Number\n• Username → Info\n"
-               "• Referral Unlock\n• Premium Plans</blockquote>\n\n")
+    caption = (
+        "🚀 <b>Welcome to TG OSINT Bot</b>\n\n"
+        "📌 <b>ID / @username</b> भेजो, details निकालो।\n\n"
+        "✨ <b>Features:</b>\n"
+        "• 🆔 ID → Mobile Number\n"
+        "• 👤 Username → Full Info\n"
+        "• 🔓 Referral Unlock\n"
+        "• 💎 Premium Plans\n"
+        "• ⚡ Fast & Secure\n\n"
+        "👇 <b>नीचे से option चुनो:</b>"
+    )
     if reason == "owner": caption += "👑 <b>Welcome, Owner!</b>\n\n"
     elif reason == "premium": caption += "💎 <b>Premium Active</b>\n\n"
     elif reason == "gate":
