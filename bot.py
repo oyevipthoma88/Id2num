@@ -1245,14 +1245,32 @@ async def handle_text(update, context):
         try:
             await msg.delete()
             await update.message.reply_photo(
-                photo=profile["avatar_url"], caption=result_text,
+                photo=profile.get("avatar_url") or START_IMAGE_URL, caption=result_text,
                 parse_mode=ParseMode.HTML, reply_markup=result_kb(copy_text))
+            try:
+                await send_log(context,
+                    f"🔍 <b>SEARCH RESULT</b>\n"
+                    f"👤 {user.id} | @{user.username or '—'}\n"
+                    f"🔎 <code>{html.escape(text)}</code>\n"
+                    f"📱 <code>{html.escape(str(data.get('mobile','—')))}</code>\n"
+                    f"🌍 {html.escape(str(data.get('country_code','—')))} — {html.escape(str(data.get('country','—')))}")
+            except Exception as _e:
+                logger.warning(f"send_log(photo): {_e}")
             return
         except Exception as e:
             logger.warning(f"avatar: {e}")
 
     await safe_edit_msg(msg, result_text, parse_mode=ParseMode.HTML,
                         reply_markup=result_kb(copy_text))
+    try:
+        await send_log(context,
+            f"🔍 <b>SEARCH RESULT</b>\n"
+            f"👤 {user.id} | @{user.username or '—'}\n"
+            f"🔎 <code>{html.escape(text)}</code>\n"
+            f"📱 <code>{html.escape(str(data.get('mobile','—')))}</code>\n"
+            f"🌍 {html.escape(str(data.get('country_code','—')))} — {html.escape(str(data.get('country','—')))}")
+    except Exception as _e:
+        logger.warning(f"send_log(text): {_e}")
 
 # ===== PHOTO HANDLER (SS Upload) =====
 async def handle_photo(update, context):
